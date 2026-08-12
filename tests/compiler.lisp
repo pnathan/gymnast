@@ -736,6 +736,135 @@
     (assert-true coverage)
     (assert-true (gymnast-tagged-p 'coverage-analysis coverage))
     (assert-true (>= (gymnast-assoc-value 'property-obligations
-            (cdr coverage)) 1))
+          (cdr coverage)) 1))
     (assert-true (>= (gymnast-assoc-value 'scenario-obligations
-            (cdr coverage)) 1))))
+          (cdr coverage)) 1))))
+
+;;; Content-addressed caching tests.
+
+(deftest cache-key-is-deterministic
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (car (gymnast-plan-field plan 'nodes)))
+      (key-a (gymnast-cache-key ir plan node))
+      (key-b (gymnast-cache-key ir plan node)))
+    (assert-equal key-a key-b)
+    (assert-true (stringp key-a))))
+
+(deftest cache-store-and-lookup
+  (gymnast-cache-clear)
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (car (gymnast-plan-field plan 'nodes)))
+      (key (gymnast-cache-key ir plan node))
+      (entry (gymnast-cache-entry key
+          (gymnast-plan-node-id node)
+          '(candidate (dummy true))
+          '(evidence (dummy true))
+          'now)))
+    (gymnast-cache-store key entry)
+    (assert-equal (gymnast-cache-size) 1)
+    (assert-true (gymnast-cache-lookup key))
+    (assert-equal
+      (gymnast-cache-entry-field (gymnast-cache-lookup key) 'node-id)
+      (gymnast-plan-node-id node))
+    (gymnast-cache-clear)))
+
+(deftest cache-miss-returns-nil
+  (gymnast-cache-clear)
+  (assert-equal (gymnast-cache-lookup "nonexistent-key") nil)
+  (assert-equal (gymnast-cache-size) 0))
+
+(deftest cache-validity-checks-key-match
+  (gymnast-cache-clear)
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (car (gymnast-plan-field plan 'nodes)))
+      (key (gymnast-cache-key ir plan node))
+      (entry (gymnast-cache-entry key
+          (gymnast-plan-node-id node) nil nil 'now)))
+    (gymnast-cache-store key entry)
+    (assert-true (gymnast-cache-entry-valid-p ir plan node
+        (gymnast-cache-lookup key)))
+    (let ((wrong-entry (gymnast-cache-entry "wrong-key"
+            (gymnast-plan-node-id node) nil nil 'now)))
+      (assert-false (gymnast-cache-entry-valid-p ir plan node wrong-entry)))
+    (gymnast-cache-clear)))
+
+(deftest cache-check-plan-reports-hits-and-misses
+  (gymnast-cache-clear)
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (results (gymnast-cache-check-plan ir plan)))
+    (assert-equal (length results) 8)
+    (assert-equal (length (gymnast-cache-hits results)) 0)
+    (assert-equal (length (gymnast-cache-misses results)) 8))
+  (gymnast-cache-clear))
+
+(deftest cache-hit-after-store
+  (gymnast-cache-clear)
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (car (gymnast-plan-field plan 'nodes))))
+    (gymnast-cache-store-result ir plan node
+      '(candidate (test true)) '(evidence (test true)))
+    (let ((results (gymnast-cache-check-plan ir plan)))
+      (assert-equal (length (gymnast-cache-hits results)) 1)
+      (assert-equal (length (gymnast-cache-misses results)) 7)))
+  (gymnast-cache-clear))
+
+(deftest dependency-closure-computation
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (design-id (gymnast-plan-id ir "design-contracts"))
+      (affected (gymnast-invalidated-nodes plan (list design-id))))
+    (assert-true (member design-id affected))
+    (assert-true (> (length affected) 1))))
+
+(deftest plan-diff-detects-unchanged
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan-a (gymnast-plan ir))
+      (plan-b (gymnast-plan ir))
+      (diff (gymnast-diff-plans plan-a plan-b)))
+    (assert-equal (length (gymnast-diff-field diff 'modified)) 0)
+    (assert-equal (length (gymnast-diff-field diff 'added)) 0)
+    (assert-equal (length (gymnast-diff-field diff 'removed)) 0)
+    (assert-equal (length (gymnast-diff-field diff 'unchanged)) 8)))
+
+(deftest cache-explain-reports-miss-reason
+  (gymnast-cache-clear)
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (car (gymnast-plan-field plan 'nodes)))
+      (explanation (gymnast-cache-explain-node ir plan node)))
+    (assert-equal
+      (gymnast-assoc-value 'status (cdr explanation)) 'miss)
+    (assert-equal
+      (gymnast-assoc-value 'reason (cdr explanation)) 'no-cache-entry))
+  (gymnast-cache-clear))
+
+(deftest cache-explain-reports-hit-after-store
+  (gymnast-cache-clear)
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (car (gymnast-plan-field plan 'nodes))))
+    (gymnast-cache-store-result ir plan node
+      '(candidate (test true)) '(evidence (test true)))
+    (let ((explanation (gymnast-cache-explain-node ir plan node)))
+      (assert-equal
+        (gymnast-assoc-value 'status (cdr explanation)) 'hit)
+      (assert-equal
+        (gymnast-assoc-value 'reason (cdr explanation)) 'valid-entry)))
+  (gymnast-cache-clear))
+
+(deftest identical-compile-produces-no-model-calls-with-cache
+  (gymnast-cache-clear)
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir)))
+    (dolist (node (gymnast-plan-field plan 'nodes))
+      (gymnast-cache-store-result ir plan node
+        '(candidate (cached true)) '(evidence (cached true))))
+    (let ((results (gymnast-cache-check-plan ir plan)))
+      (assert-equal (length (gymnast-cache-hits results)) 8)
+      (assert-equal (length (gymnast-cache-misses results)) 0)))
+  (gymnast-cache-clear))

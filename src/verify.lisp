@@ -362,7 +362,7 @@
     (if (not coverage-ob)
       nil
       (let* ((want-ops
-              (gymnast-obligation-field coverage-ob 'every-operation))
+            (gymnast-obligation-field coverage-ob 'every-operation))
           (want-transitions
             (gymnast-obligation-field coverage-ob 'every-transition))
           (want-invariants

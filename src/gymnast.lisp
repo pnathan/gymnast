@@ -12,6 +12,7 @@
 (include "recipe.lisp")
 (include "runner.lisp")
 (include "verify.lisp")
+(include "cache.lisp")
 (include "serialize.lisp")
 
 (defun gymnast-compile (surface)
