@@ -416,3 +416,70 @@
       (diagnostics (gymnast-validate-plan-capabilities
           plan $gymnast-ruby-platform-kit)))
     (assert-equal (length diagnostics) 0)))
+
+;;; Recipe registry and executor tests.
+
+(deftest recipe-registry-has-all-plan-recipes
+  (assert-true (gymnast-lookup-recipe 'design-contracts-v1))
+  (assert-true (gymnast-lookup-recipe 'interface-contracts-v1))
+  (assert-true (gymnast-lookup-recipe 'acceptance-harness-v1))
+  (assert-true (gymnast-lookup-recipe 'application-assembly-v1))
+  (assert-true (gymnast-lookup-recipe 'transition-kernel-v1))
+  (assert-true (gymnast-lookup-recipe 'authorization-policy-v1))
+  (assert-true (gymnast-lookup-recipe 'persistence-v1))
+  (assert-true (gymnast-lookup-recipe 'service-handlers-v1)))
+
+(deftest unknown-recipe-fails-closed
+  (assert-false (gymnast-lookup-recipe 'nonexistent-recipe-v1)))
+
+(deftest structural-recipes-are-deterministic
+  (let* ((r (gymnast-lookup-recipe 'design-contracts-v1)))
+    (assert-false (gymnast-recipe-requires-model-p r))))
+
+(deftest generative-recipes-require-model
+  (let* ((r (gymnast-lookup-recipe 'transition-kernel-v1)))
+    (assert-true (gymnast-recipe-requires-model-p r))))
+
+(deftest deterministic-execution-produces-results
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (results (gymnast-execute-deterministic ir plan)))
+    (assert-equal (length results) 8)
+    (let ((deterministic (gymnast-deterministic-results results))
+        (deferred (gymnast-deferred-results results)))
+      (assert-equal (length deterministic) 4)
+      (assert-equal (length deferred) 4))))
+
+(deftest structural-recipe-produces-valid-candidate
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (gymnast-find-plan-node plan
+          (gymnast-plan-id ir "design-contracts")))
+      (result (gymnast-execute-recipe ir plan node)))
+    (assert-equal
+      (gymnast-execution-result-field result 'status) 'succeeded)
+    (assert-equal
+      (gymnast-execution-result-field result 'recipe-identity)
+      'design-contracts-v1)))
+
+(deftest structural-recipe-output-is-byte-stable
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (gymnast-find-plan-node plan
+          (gymnast-plan-id ir "design-contracts")))
+      (a (gymnast-execute-recipe ir plan node))
+      (b (gymnast-execute-recipe ir plan node)))
+    (assert-equal
+      (gymnast-execution-result-field a 'candidate)
+      (gymnast-execution-result-field b 'candidate))))
+
+(deftest generative-recipe-defers-to-model
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (gymnast-find-plan-node plan
+          (gymnast-plan-id ir "transition-kernel")))
+      (result (gymnast-execute-recipe ir plan node)))
+    (assert-equal
+      (gymnast-execution-result-field result 'status) 'deferred)
+    (assert-equal
+      (gymnast-execution-result-field result 'reason) 'requires-model)))

@@ -9,6 +9,7 @@
 (include "candidate.lisp")
 (include "transition.lisp")
 (include "platform.lisp")
+(include "recipe.lisp")
 (include "serialize.lisp")
 
 (defun gymnast-compile (surface)
