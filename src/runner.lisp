@@ -119,11 +119,35 @@
 ;;; Safe reader: parse S-expression data without evaluation.
 ;;; In Lamedh, read-from-string returns parsed data without
 ;;; executing it, which is the correct trust boundary.
+;;; Models sometimes wrap output in markdown fences despite
+;;; the system prompt; extract the outermost S-expression by
+;;; finding the first ( and last ) in the response.
+
+(defun gymnast-find-char (chars ch idx)
+  (cond ((null chars) nil)
+    ((equal (car chars) ch) idx)
+    (t (gymnast-find-char (cdr chars) ch (+ idx 1)))))
+
+(defun gymnast-rfind-char (chars ch idx last)
+  (cond ((null chars) last)
+    ((equal (car chars) ch)
+      (gymnast-rfind-char (cdr chars) ch (+ idx 1) idx))
+    (t (gymnast-rfind-char (cdr chars) ch (+ idx 1) last))))
+
+(defun gymnast-extract-sexpr (text)
+  (let* ((chars (string->list text))
+      (open-paren (code-char 40))
+      (close-paren (code-char 41))
+      (start (gymnast-find-char chars open-paren 0))
+      (end (gymnast-rfind-char chars close-paren 0 nil)))
+    (if (and start end (>= end start))
+      (substring text start (+ end 1))
+      text)))
 
 (defun gymnast-safe-read (text)
   (if (or (null text) (equal text ""))
     nil
-    (read-from-string text)))
+    (ignore-errors (read-from-string (gymnast-extract-sexpr text)))))
 
 ;;; Run all generative nodes in a plan.
 
