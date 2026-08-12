@@ -11,6 +11,11 @@
 
 (def $gymnast-bundle-schema "gymnast.bundle/0.1")
 
+(defrecord gymnast-artifact path node-id digest size)
+
+(defrecord gymnast-traceability-entry semantic-id kind plan-nodes
+  has-implementation has-evidence)
+
 ;;; Artifact linking: collect all candidate file outputs and validate
 ;;; that every declared artifact is present and no untracked files exist.
 
@@ -22,20 +27,17 @@
           (if (and candidate (gymnast-tagged-p 'candidate candidate))
             (let ((files (gymnast-candidate-field candidate 'files)))
               (mapcar (lambda (f)
-                  (list 'artifact
-                    (list 'path (car f))
-                    (list 'node-id
-                      (gymnast-assoc-value 'node-id (cdr result)))
-                    (list 'digest
-                      (gymnast-fingerprint-string (cadr f)))
-                    (list 'size (length (cadr f)))))
+                  (make-gymnast-artifact (car f)
+                    (gymnast-assoc-value 'node-id (cdr result))
+                    (gymnast-fingerprint-string (cadr f))
+                    (length (cadr f))))
                 (or files nil)))
             nil)))
       results)
     nil))
 
 (defun gymnast-artifact-field (artifact key)
-  (gymnast-assoc-value key (cdr artifact)))
+  (record-ref artifact key))
 
 ;;; Validate that artifacts match declared may-write paths.
 
@@ -104,15 +106,14 @@
           (lambda (r)
             (member (gymnast-assoc-value 'node-id (cdr r)) plan-ids))
           results)))
-    (list 'traceability-entry
-      (list 'semantic-id id)
-      (list 'kind (gymnast-ir-node-kind ir-node))
-      (list 'plan-nodes plan-ids)
-      (list 'has-implementation (> (length plan-ids) 0))
-      (list 'has-evidence (> (length evidence) 0)))))
+    (make-gymnast-traceability-entry id
+      (gymnast-ir-node-kind ir-node)
+      plan-ids
+      (> (length plan-ids) 0)
+      (> (length evidence) 0))))
 
 (defun gymnast-traceability-entry-field (entry key)
-  (gymnast-assoc-value key (cdr entry)))
+  (record-ref entry key))
 
 (defun gymnast-build-traceability-map (ir plan results)
   (mapcar

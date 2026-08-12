@@ -6,6 +6,12 @@
 ;;; provides a bounded reference interpreter that produces stable
 ;;; counterexamples for illegal state transitions.
 
+(defrecord gymnast-transition id operation actor input reads writes
+  atomic idempotency preconditions postconditions result failures emissions)
+
+(defrecord gymnast-trace-step transition-id actor input pre-state
+  post-state result outcome)
+
 ;;; Transition model extraction from behavior IR nodes.
 
 (defun gymnast-clause-head (clause) (car clause))
@@ -47,23 +53,19 @@
       (returns (gymnast-collect-clauses clauses 'returns))
       (fails (gymnast-collect-clauses clauses 'fails))
       (emits (gymnast-collect-clauses clauses 'emits)))
-    (list 'transition
-      (list 'id id)
-      (list 'operation (car parsed-on))
-      (list 'actor (cadr parsed-on))
-      (list 'input (caddr parsed-on))
-      (list 'reads (if (consp reads) reads (if reads (list reads) nil)))
-      (list 'writes (if (consp writes) writes (if writes (list writes) nil)))
-      (list 'atomic atomic)
-      (list 'idempotency idempotency)
-      (list 'preconditions (mapcar #'gymnast-clause-body requires))
-      (list 'postconditions (mapcar #'gymnast-clause-body ensures))
-      (list 'result (if returns (gymnast-clause-body (car returns)) nil))
-      (list 'failures (mapcar #'gymnast-clause-body fails))
-      (list 'emissions (mapcar #'gymnast-clause-body emits)))))
+    (make-gymnast-transition id (car parsed-on) (cadr parsed-on)
+      (caddr parsed-on)
+      (if (consp reads) reads (if reads (list reads) nil))
+      (if (consp writes) writes (if writes (list writes) nil))
+      atomic idempotency
+      (mapcar #'gymnast-clause-body requires)
+      (mapcar #'gymnast-clause-body ensures)
+      (if returns (gymnast-clause-body (car returns)) nil)
+      (mapcar #'gymnast-clause-body fails)
+      (mapcar #'gymnast-clause-body emits))))
 
 (defun gymnast-transition-field (tr key)
-  (gymnast-assoc-value key (cdr tr)))
+  (record-ref tr key))
 
 (defun gymnast-extract-transitions (ir)
   (mapcar #'gymnast-extract-transition
@@ -162,14 +164,8 @@
 
 (defun gymnast-make-trace-step (transition pre-state post-state
     actor input result outcome)
-  (list 'trace-step
-    (list 'transition-id (gymnast-transition-field transition 'id))
-    (list 'actor actor)
-    (list 'input input)
-    (list 'pre-state pre-state)
-    (list 'post-state post-state)
-    (list 'result result)
-    (list 'outcome outcome)))
+  (make-gymnast-trace-step (gymnast-transition-field transition 'id)
+    actor input pre-state post-state result outcome))
 
 (defun gymnast-check-preconditions (transition state actor input)
   (let ((preds (gymnast-transition-field transition 'preconditions)))
@@ -248,14 +244,8 @@
         (transition (if matching (car matching) nil)))
       (if (not transition)
         (let ((error-result
-              (list 'trace-step
-                (list 'transition-id 'unknown)
-                (list 'actor actor)
-                (list 'input input)
-                (list 'pre-state state)
-                (list 'post-state state)
-                (list 'result nil)
-                (list 'outcome (list 'no-matching-transition op-name)))))
+              (make-gymnast-trace-step 'unknown actor input state state nil
+                (list 'no-matching-transition op-name))))
           (gymnast-execute-trace-steps ir transitions (cdr steps)
             state (cons error-result results)
             (cons (list 'violation
@@ -265,7 +255,7 @@
             (- bound 1)))
         (let* ((result (gymnast-apply-transition
                 transition state actor input))
-            (post (gymnast-assoc-value 'post-state (cdr result)))
+            (post (gymnast-trace-step-post-state result))
             (inv-violations (gymnast-check-invariants ir post)))
           (gymnast-execute-trace-steps ir transitions (cdr steps)
             post (cons result results)
@@ -291,8 +281,8 @@
     (list 'violation violation)
     (list 'trace-step trace-step)
     (list 'pre-state
-      (gymnast-assoc-value 'pre-state (cdr trace-step)))
+      (gymnast-trace-step-pre-state trace-step))
     (list 'input
-      (gymnast-assoc-value 'input (cdr trace-step)))
+      (gymnast-trace-step-input trace-step))
     (list 'outcome
-      (gymnast-assoc-value 'outcome (cdr trace-step)))))
+      (gymnast-trace-step-outcome trace-step))))
