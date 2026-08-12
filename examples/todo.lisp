@@ -133,7 +133,7 @@
       (= invariant-violations 0)))
 
   (synthesis prototype
-    :target (lamedh :track "0.5")
+    :target (ruby :framework rails)
     :platform gymnast-reference-platform-v1
     :model (small-code-model
       :class nano
