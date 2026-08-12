@@ -365,3 +365,54 @@
     (assert-true (gymnast-tagged-p 'counterexample ce))
     (assert-equal (gymnast-assoc-value 'violation (cdr ce)) violation)
     (assert-equal (gymnast-assoc-value 'input (cdr ce)) "data")))
+
+;;; Platform kit tests.
+
+(deftest ruby-platform-kit-is-registered
+  (assert-true $gymnast-ruby-platform-kit)
+  (assert-equal
+    (gymnast-platform-kit-field $gymnast-ruby-platform-kit 'name)
+    'gymnast-ruby-platform-v1)
+  (assert-equal
+    (gymnast-platform-kit-field $gymnast-ruby-platform-kit 'target)
+    'ruby))
+
+(deftest ruby-platform-kit-has-all-capabilities
+  (let ((names (gymnast-platform-kit-capability-names
+          $gymnast-ruby-platform-kit)))
+    (assert-true (member 'identity names))
+    (assert-true (member 'persistence names))
+    (assert-true (member 'repository names))
+    (assert-true (member 'transactions names))
+    (assert-true (member 'clock names))
+    (assert-true (member 'id-source names))
+    (assert-true (member 'http names))
+    (assert-true (member 'telemetry names))
+    (assert-true (member 'lifecycle names))
+    (assert-true (member 'durable-store names))))
+
+(deftest platform-kit-lookup-by-version
+  (let ((kit (gymnast-lookup-platform-kit
+          'gymnast-ruby-platform-v1 "1.0")))
+    (assert-true kit)
+    (assert-equal (gymnast-platform-kit-field kit 'version) "1.0")))
+
+(deftest platform-capability-has-characterization
+  (let* ((caps (gymnast-platform-kit-field
+          $gymnast-ruby-platform-kit 'capabilities))
+      (clock-cap (car (filter
+            (lambda (c)
+              (equal (gymnast-capability-field c 'name) 'clock))
+            caps))))
+    (assert-true clock-cap)
+    (assert-true (member 'monotonic
+        (gymnast-capability-field clock-cap 'guarantees)))
+    (assert-true (member 'drift-beyond-tolerance
+        (gymnast-capability-field clock-cap 'failure-modes)))))
+
+(deftest platform-validates-known-capabilities
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (diagnostics (gymnast-validate-plan-capabilities
+          plan $gymnast-ruby-platform-kit)))
+    (assert-equal (length diagnostics) 0)))
