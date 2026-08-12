@@ -9,11 +9,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build pinned Lamedh
+      - name: Install pinned Lamedh release
         run: scripts/bootstrap-lamedh.sh
       - name: Format check
-        run: .tools/bin/lamedh --fmt-check src tests examples
+        run: find src tests examples -type f -name '*.lisp' -print0 | sort -z | xargs -0 .tools/bin/lamedh --fmt-check
       - name: Lisp tests
         run: .tools/bin/lamedh --test tests
       - name: Elaborate Todo

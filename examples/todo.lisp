@@ -134,7 +134,7 @@
 
   (synthesis prototype
     :target (lamedh :track "0.5")
-    :platform gymnast/reference-platform-v1
+    :platform gymnast-reference-platform-v1
     :model (small-code-model
              :class nano
              :temperature 0

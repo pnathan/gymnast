@@ -29,7 +29,9 @@ stages are stable before adding a generative executor.
 
 ## Run
 
-The repository pins the Lamedh revision in `LAMEDH_REVISION`.
+The repository pins the Lamedh release in `LAMEDH_VERSION`. The bootstrap
+script installs a checksum-verified Linux binary for x86-64 or ARM64; building
+the Lamedh runtime from source is not required.
 
 ```sh
 scripts/bootstrap-lamedh.sh

@@ -43,7 +43,7 @@
          (assembly-id (gymnast-plan-id ir "application-assembly"))
          (design
            (gymnast-plan-node
-             design-id 'structural 'design-contracts/v1
+             design-id 'structural 'design-contracts-v1
              (gymnast-ids-for-kinds ir '(actor type component flow))
              nil target '(none)
              '("generated/design/contracts.lisp") nil
@@ -51,7 +51,7 @@
              '(invent-product-semantics add-dependencies)))
          (transitions
            (gymnast-plan-node
-             transition-id 'generative 'transition-kernel/v1
+             transition-id 'generative 'transition-kernel-v1
              (gymnast-ids-for-kinds ir '(type state behavior invariant))
              (list design-id) target model
              '("generated/domain/transitions.lisp")
@@ -61,7 +61,7 @@
              '(perform-io weaken-preconditions invent-errors)))
          (authorization
            (gymnast-plan-node
-             auth-id 'generative 'authorization-policy/v1
+             auth-id 'generative 'authorization-policy-v1
              (gymnast-ids-for-kinds ir '(actor flow behavior invariant))
              (list design-id transition-id) target model
              '("generated/domain/authorization.lisp") nil
@@ -69,7 +69,7 @@
              '(grant-undeclared-capabilities reveal-resource-existence)))
          (persistence
            (gymnast-plan-node
-             persistence-id 'generative 'persistence/v1
+             persistence-id 'generative 'persistence-v1
              (gymnast-ids-for-kinds ir '(type state behavior constraint))
              (list design-id transition-id) target model
              '("generated/adapters/persistence.lisp"
@@ -79,7 +79,7 @@
              '(perform-network-io choose-unpinned-dependencies)))
          (interfaces
            (gymnast-plan-node
-             interface-id 'structural 'interface-contracts/v1
+             interface-id 'structural 'interface-contracts-v1
              (gymnast-ids-for-kinds ir '(type interface))
              (list design-id) target '(none)
              '("generated/interfaces/contracts.lisp") nil
@@ -87,7 +87,7 @@
              '(change-observable-contract)))
          (handlers
            (gymnast-plan-node
-             handler-id 'generative 'service-handlers/v1
+             handler-id 'generative 'service-handlers-v1
              (gymnast-ids-for-kinds ir '(interface behavior state constraint))
              (list transition-id auth-id persistence-id interface-id)
              target model
@@ -98,7 +98,7 @@
              '(access-filesystem access-network add-endpoints)))
          (acceptance
            (gymnast-plan-node
-             acceptance-id 'verification 'acceptance-harness/v1
+             acceptance-id 'verification 'acceptance-harness-v1
              (gymnast-ids-for-kinds
                ir '(behavior invariant constraint acceptance interface state))
              (list handler-id) target '(none)
@@ -108,7 +108,7 @@
              '(read-generated-rationale weaken-obligations skip-failures)))
          (assembly
            (gymnast-plan-node
-             assembly-id 'assembly 'application-assembly/v1
+             assembly-id 'assembly 'application-assembly-v1
              (gymnast-ids-for-kinds
                ir '(application import component synthesis constraint))
              (list transition-id auth-id persistence-id interface-id
