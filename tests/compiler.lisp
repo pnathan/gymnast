@@ -483,3 +483,72 @@
       (gymnast-execution-result-field result 'status) 'deferred)
     (assert-equal
       (gymnast-execution-result-field result 'reason) 'requires-model)))
+
+;;; Model runner tests.
+
+(defun make-stub-provider (candidate-string)
+  (lambda (request) candidate-string))
+
+(deftest model-request-preparation
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (gymnast-find-plan-node plan
+          (gymnast-plan-id ir "transition-kernel")))
+      (prompt (gymnast-compile-prompt ir plan node))
+      (request (gymnast-prepare-model-request prompt)))
+    (assert-true (gymnast-tagged-p 'model-request request))
+    (assert-true (stringp (gymnast-model-request-field request 'prompt-text)))
+    (assert-true (gymnast-model-request-field request 'prompt-fingerprint))))
+
+(deftest runner-accepts-valid-candidate
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (gymnast-find-plan-node plan
+          (gymnast-plan-id ir "transition-kernel")))
+      (files (gymnast-plan-node-field node 'may-write))
+      (candidate-text (prin1-to-string
+          (list 'candidate
+            (list 'schema $gymnast-candidate-schema)
+            (list 'node-id (gymnast-plan-node-id node))
+            (list 'files
+              (list (list (car files) "# generated code")))
+            (list 'implements nil)
+            (list 'edge-uses nil)
+            (list 'assumptions nil)
+            (list 'unresolved nil))))
+      (provider (make-stub-provider candidate-text))
+      (result (gymnast-run-node ir plan node provider 3)))
+    (assert-equal (gymnast-run-result-field result 'status) 'succeeded)
+    (assert-equal (length (gymnast-run-result-field result 'attempts)) 1)))
+
+(deftest runner-rejects-and-retries-bad-candidate
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (gymnast-find-plan-node plan
+          (gymnast-plan-id ir "transition-kernel")))
+      (provider (make-stub-provider "not-an-sexpr"))
+      (result (gymnast-run-node ir plan node provider 2)))
+    (assert-equal (gymnast-run-result-field result 'status) 'exhausted)
+    (assert-equal (length (gymnast-run-result-field result 'attempts)) 2)))
+
+(deftest runner-records-attempt-provenance
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (node (gymnast-find-plan-node plan
+          (gymnast-plan-id ir "transition-kernel")))
+      (provider (make-stub-provider "garbage"))
+      (result (gymnast-run-node ir plan node provider 1))
+      (attempts (gymnast-run-result-field result 'attempts))
+      (attempt (car attempts)))
+    (assert-equal (gymnast-attempt-field attempt 'number) 1)
+    (assert-equal (gymnast-attempt-field attempt 'status) 'rejected)
+    (assert-true (gymnast-attempt-field attempt 'prompt-fingerprint))))
+
+(deftest safe-read-parses-valid-sexpr
+  (let ((result (gymnast-safe-read "(candidate (node-id \"x\"))")))
+    (assert-true (gymnast-tagged-p 'candidate result))
+    (assert-equal (gymnast-assoc-value 'node-id (cdr result)) "x")))
+
+(deftest safe-read-handles-empty-input
+  (assert-equal (gymnast-safe-read "") nil)
+  (assert-equal (gymnast-safe-read nil) nil))
