@@ -263,3 +263,105 @@
   (let* ((ir (gymnast-elaborate gymnast-test-spec))
       (plan (gymnast-plan ir)))
     (assert-equal (gymnast-verify-fingerprint plan 'plan) nil)))
+
+;;; Executable transition calculus tests.
+
+(deftest transition-extraction-from-behavior-nodes
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (transitions (gymnast-extract-transitions ir)))
+    (assert-equal (length transitions) 1)
+    (let ((tr (car transitions)))
+      (assert-equal (gymnast-transition-field tr 'operation) "api/add")
+      (assert-equal (gymnast-transition-field tr 'actor) 'user)
+      (assert-equal (gymnast-transition-field tr 'input) 'item)
+      (assert-true (member 'items (gymnast-transition-field tr 'reads)))
+      (assert-true (member 'items (gymnast-transition-field tr 'writes)))
+      (assert-equal (gymnast-transition-field tr 'atomic) 'items)
+      (assert-equal (gymnast-transition-field tr 'idempotency) 'command-key)
+      (assert-equal (length (gymnast-transition-field tr 'preconditions)) 1)
+      (assert-equal (length (gymnast-transition-field tr 'postconditions)) 1))))
+
+(deftest transition-reference-checking-valid-refs
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (transitions (gymnast-extract-transitions ir))
+      (diagnostics (gymnast-check-all-transitions ir transitions)))
+    (assert-equal (length diagnostics) 0)))
+
+(deftest transition-reference-checking-invalid-refs
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (bad-transition
+        (list 'transition
+          (list 'id "test-bad")
+          (list 'operation "api/add")
+          (list 'actor nil)
+          (list 'input nil)
+          (list 'reads (list 'nonexistent-state))
+          (list 'writes nil)
+          (list 'atomic nil)
+          (list 'idempotency nil)
+          (list 'preconditions nil)
+          (list 'postconditions nil)
+          (list 'result nil)
+          (list 'failures nil)
+          (list 'emissions nil)))
+      (diagnostics (gymnast-check-all-transitions ir (list bad-transition))))
+    (assert-equal (length diagnostics) 1)))
+
+(deftest initial-state-construction
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (state (gymnast-make-initial-state ir)))
+    (assert-true (> (length state) 0))
+    (assert-true (assoc 'items state))))
+
+(deftest predicate-evaluation-equality
+  (let ((state (list (list 'x 42))))
+    (assert-true (gymnast-eval-predicate '(= x 42) state nil nil))
+    (assert-false (gymnast-eval-predicate '(= x 99) state nil nil))))
+
+(deftest predicate-evaluation-logical-ops
+  (let ((state (list (list 'x 42))))
+    (assert-true (gymnast-eval-predicate '(and (= x 42)) state nil nil))
+    (assert-false (gymnast-eval-predicate '(and (= x 42) (= x 99))
+        state nil nil))
+    (assert-true (gymnast-eval-predicate '(or (= x 99) (= x 42))
+        state nil nil))
+    (assert-true (gymnast-eval-predicate '(not (= x 99)) state nil nil))
+    (assert-false (gymnast-eval-predicate '(not (= x 42)) state nil nil))))
+
+(deftest predicate-evaluation-comparison
+  (let ((state (list (list 'x 10))))
+    (assert-true (gymnast-eval-predicate '(< x 20) state nil nil))
+    (assert-false (gymnast-eval-predicate '(< x 5) state nil nil))
+    (assert-true (gymnast-eval-predicate '(<= x 10) state nil nil))
+    (assert-false (gymnast-eval-predicate '(<= x 9) state nil nil))))
+
+(deftest trace-execution-with-test-spec
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (trace (gymnast-execute-trace ir
+          (list (list "api/add" 'user "item-1")))))
+    (assert-true (gymnast-tagged-p 'trace trace))
+    (let ((steps (gymnast-trace-field trace 'steps))
+        (final (gymnast-trace-field trace 'final-state)))
+      (assert-equal (length steps) 1)
+      (assert-true (consp final)))))
+
+(deftest trace-unknown-operation-produces-violation
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (trace (gymnast-execute-trace ir
+          (list (list "api/delete" 'user "item-1")))))
+    (assert-true (> (length (gymnast-trace-violations trace)) 0))))
+
+(deftest counterexample-structure
+  (let* ((violation (list 'violation (list 'type 'test) (list 'detail "x")))
+      (step (list 'trace-step
+          (list 'transition-id "t1")
+          (list 'actor 'user)
+          (list 'input "data")
+          (list 'pre-state (list (list 'x 1)))
+          (list 'post-state (list (list 'x 1)))
+          (list 'result nil)
+          (list 'outcome (list 'failed 'error))))
+      (ce (gymnast-counterexample violation step)))
+    (assert-true (gymnast-tagged-p 'counterexample ce))
+    (assert-equal (gymnast-assoc-value 'violation (cdr ce)) violation)
+    (assert-equal (gymnast-assoc-value 'input (cdr ce)) "data")))
