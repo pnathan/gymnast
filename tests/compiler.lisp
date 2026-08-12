@@ -315,20 +315,8 @@
 (deftest transition-reference-checking-invalid-refs
   (let* ((ir (gymnast-elaborate gymnast-test-spec))
       (bad-transition
-        (list 'transition
-          (list 'id "test-bad")
-          (list 'operation "api/add")
-          (list 'actor nil)
-          (list 'input nil)
-          (list 'reads (list 'nonexistent-state))
-          (list 'writes nil)
-          (list 'atomic nil)
-          (list 'idempotency nil)
-          (list 'preconditions nil)
-          (list 'postconditions nil)
-          (list 'result nil)
-          (list 'failures nil)
-          (list 'emissions nil)))
+        (make-gymnast-transition "test-bad" "api/add" nil nil
+          (list 'nonexistent-state) nil nil nil nil nil nil nil nil))
       (diagnostics (gymnast-check-all-transitions ir (list bad-transition))))
     (assert-equal (length diagnostics) 1)))
 
@@ -378,14 +366,8 @@
 
 (deftest counterexample-structure
   (let* ((violation (list 'violation (list 'type 'test) (list 'detail "x")))
-      (step (list 'trace-step
-          (list 'transition-id "t1")
-          (list 'actor 'user)
-          (list 'input "data")
-          (list 'pre-state (list (list 'x 1)))
-          (list 'post-state (list (list 'x 1)))
-          (list 'result nil)
-          (list 'outcome (list 'failed 'error))))
+      (step (make-gymnast-trace-step "t1" 'user "data"
+          (list (list 'x 1)) (list (list 'x 1)) nil (list 'failed 'error)))
       (ce (gymnast-counterexample violation step)))
     (assert-true (gymnast-tagged-p 'counterexample ce))
     (assert-equal (gymnast-assoc-value 'violation (cdr ce)) violation)
@@ -712,14 +694,8 @@
           (list 'type 'outcome-mismatch)
           (list 'reference '(succeeded))
           (list 'implementation '(failed forbidden))
-          (list 'step (list 'trace-step
-              (list 'transition-id "api/add")
-              (list 'actor 'user)
-              (list 'input 'item)
-              (list 'pre-state nil)
-              (list 'post-state nil)
-              (list 'result nil)
-              (list 'outcome '(failed forbidden)))))))
+          (list 'step (make-gymnast-trace-step "api/add" 'user 'item
+              nil nil nil '(failed forbidden))))))
     (let ((cx (gymnast-normalize-counterexample div "test-ob")))
       (assert-true (gymnast-tagged-p 'normalized-counterexample cx))
       (assert-equal
@@ -898,7 +874,7 @@
       (artifacts (gymnast-collect-artifacts results)))
     (assert-true (> (length artifacts) 0))
     (let ((first (car artifacts)))
-      (assert-true (gymnast-tagged-p 'artifact first))
+      (assert-true (gymnast-artifact-p first))
       (assert-true (gymnast-artifact-field first 'path))
       (assert-true (gymnast-artifact-field first 'digest))
       (assert-true (gymnast-artifact-field first 'node-id)))))
@@ -926,7 +902,7 @@
     (assert-equal (length traceability)
       (length (gymnast-ir-all-nodes ir)))
     (let ((first (car traceability)))
-      (assert-true (gymnast-tagged-p 'traceability-entry first))
+      (assert-true (gymnast-traceability-entry-p first))
       (assert-true
         (gymnast-traceability-entry-field first 'semantic-id)))))
 
@@ -1029,7 +1005,7 @@
           (lambda (ir-val)
             (gymnast-mutate-weaken-precondition ir-val 'add))))
       (result (gymnast-run-mutant ir mutant)))
-    (assert-true (gymnast-tagged-p 'mutant-result result))
+    (assert-true (gymnast-mutant-result-p result))
     (assert-equal
       (gymnast-mutant-result-field result 'mutant-id) 'weaken-add)
     (assert-equal
@@ -1069,7 +1045,7 @@
   (let ((faults (gymnast-standard-fault-scenarios)))
     (assert-equal (length faults) 4)
     (assert-true (gymnast-all
-        (lambda (f) (gymnast-tagged-p 'fault-scenario f))
+        (lambda (f) (gymnast-fault-scenario-p f))
         faults))))
 
 (deftest campaign-reports-blind-spots-for-survivors

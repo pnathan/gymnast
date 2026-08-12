@@ -43,44 +43,7 @@
 (defun gymnast-tagged-p (tag x)
   (and (consp x) (equal (car x) tag)))
 
-(defun gymnast-diagnostic (severity code subject message details)
-  (list 'diagnostic
-    (list 'severity severity)
-    (list 'code code)
-    (list 'subject subject)
-    (list 'message message)
-    (list 'details details)))
-
-(defun gymnast-diagnostic-field (diagnostic key)
-  (gymnast-assoc-value key (cdr diagnostic)))
-
-(defun gymnast-error-diagnostic-p (diagnostic)
-  (and (gymnast-tagged-p 'diagnostic diagnostic)
-    (equal (gymnast-diagnostic-field diagnostic 'severity) 'error)))
-
-(defun gymnast-has-errors-p (diagnostics)
-  (gymnast-any #'gymnast-error-diagnostic-p diagnostics))
-
-;;; Surface declarations are intentionally small and untyped.  Elaboration
-;;; validates and replaces them with closed IR nodes.
-
-(defun gymnast-make-surface (kind name operands children mechanism)
-  (list 'surface kind name operands children mechanism))
-
-(defun gymnast-surface-p (x) (gymnast-tagged-p 'surface x))
-(defun gymnast-surface-kind (x) (cadr x))
-(defun gymnast-surface-name (x) (caddr x))
-(defun gymnast-surface-operands (x) (cadddr x))
-(defun gymnast-surface-children (x) (car (cdr (cdr (cdr (cdr x))))))
-(defun gymnast-surface-mechanism (x) (car (cdr (cdr (cdr (cdr (cdr x)))))))
-
-(defun gymnast-make-invalid-surface (form message)
-  (list 'invalid-surface form message))
-
-(defun gymnast-invalid-surface-p (x) (gymnast-tagged-p 'invalid-surface x))
-
-;;; Canonical data helpers.  Fields and nodes are sorted; order inside a
-;;; behavioral clause is preserved because sequence can be semantic.
+;;; Canonical data helpers.
 
 (defun gymnast-canonical-less-p (a b)
   (string-lessp (prin1-to-string a) (prin1-to-string b)))
@@ -96,9 +59,7 @@
     ((atom x) x)
     (t (mapcar #'gymnast-canonical-data x))))
 
-;;; FNV-1a is a deterministic first-cut fingerprint, not a security digest.
-;;; It is deliberately named accordingly.  The artifact schema leaves room
-;;; for a host-supplied SHA-256 implementation without changing IR identity.
+;;; FNV-1a fingerprinting.
 
 (defun gymnast-fnv1a-step (hash chars)
   (if (null chars)
@@ -117,25 +78,53 @@
 (defun gymnast-fingerprint (value)
   (gymnast-fingerprint-string (prin1-to-string value)))
 
-(defun gymnast-ir-node (id kind name fields clauses mechanism)
-  (list 'ir-node
-    (list 'id id)
-    (list 'kind kind)
-    (list 'name name)
-    (list 'fields (gymnast-canonical-fields fields))
-    (list 'clauses clauses)
-    (list 'surface-mechanism mechanism)))
+;;; Record type declarations.
 
-(defun gymnast-ir-node-p (x) (gymnast-tagged-p 'ir-node x))
+(defrecord gymnast-diagnostic severity code subject message details)
+
+(defrecord gymnast-surface kind name operands children mechanism)
+
+(defrecord gymnast-invalid-surface form message)
+
+(defrecord gymnast-ir-node id kind name fields clauses surface-mechanism)
+
+(defrecord gymnast-plan-node id class recipe inputs depends-on target model
+  may-write capabilities obligations prohibitions fingerprint)
+
+;;; Wrapper constructors preserve existing call-site API.
+
+(defun gymnast-diagnostic (severity code subject message details)
+  (make-gymnast-diagnostic severity code subject message details))
+
+(defun gymnast-diagnostic-field (diagnostic key)
+  (record-ref diagnostic key))
+
+(defun gymnast-error-diagnostic-p (diagnostic)
+  (and (gymnast-diagnostic-p diagnostic)
+    (equal (gymnast-diagnostic-field diagnostic 'severity) 'error)))
+
+(defun gymnast-has-errors-p (diagnostics)
+  (gymnast-any #'gymnast-error-diagnostic-p diagnostics))
+
+(defun gymnast-make-surface (kind name operands children mechanism)
+  (make-gymnast-surface kind name operands children mechanism))
+
+(defun gymnast-make-invalid-surface (form message)
+  (make-gymnast-invalid-surface form message))
+
+(defun gymnast-ir-node (id kind name fields clauses mechanism)
+  (make-gymnast-ir-node id kind name
+    (gymnast-canonical-fields fields) clauses mechanism))
+
 (defun gymnast-ir-node-field (node key)
-  (gymnast-assoc-value key (cdr node)))
-(defun gymnast-ir-node-id (node) (gymnast-ir-node-field node 'id))
-(defun gymnast-ir-node-kind (node) (gymnast-ir-node-field node 'kind))
+  (record-ref node key))
 
 (defun gymnast-sort-ir-nodes (nodes)
   (sort nodes (lambda (a b)
       (string-lessp (gymnast-ir-node-id a)
         (gymnast-ir-node-id b)))))
+
+;;; IR container accessors (IR stays as an alist).
 
 (defun gymnast-ir-field (ir key)
   (gymnast-assoc-value key (cdr ir)))
@@ -159,28 +148,38 @@
           (gymnast-ir-all-nodes ir))))
     (if matches (car matches) nil)))
 
+;;; Plan node constructor.  Sorts collections, computes fingerprint from
+;;; a canonical alist contract, then stores in a record.
+
 (defun gymnast-plan-node (id class recipe inputs depends-on target model
     may-write capabilities obligations prohibitions)
-  (let* ((contract
+  (let* ((sorted-inputs (sort inputs #'string-lessp))
+      (sorted-depends (sort depends-on #'string-lessp))
+      (sorted-write (sort may-write #'string-lessp))
+      (sorted-caps (sort capabilities #'gymnast-canonical-less-p))
+      (sorted-obs (sort obligations #'gymnast-canonical-less-p))
+      (sorted-proh (sort prohibitions #'gymnast-canonical-less-p))
+      (contract
         (list 'node-contract
           (list 'id id)
           (list 'class class)
           (list 'recipe recipe)
-          (list 'inputs (sort inputs #'string-lessp))
-          (list 'depends-on (sort depends-on #'string-lessp))
+          (list 'inputs sorted-inputs)
+          (list 'depends-on sorted-depends)
           (list 'target target)
           (list 'model model)
-          (list 'may-write (sort may-write #'string-lessp))
-          (list 'capabilities (sort capabilities #'gymnast-canonical-less-p))
-          (list 'obligations (sort obligations #'gymnast-canonical-less-p))
-          (list 'prohibitions (sort prohibitions #'gymnast-canonical-less-p))))
-      (fingerprint (gymnast-fingerprint contract)))
-    (append contract (list (list 'fingerprint fingerprint)))))
+          (list 'may-write sorted-write)
+          (list 'capabilities sorted-caps)
+          (list 'obligations sorted-obs)
+          (list 'prohibitions sorted-proh)))
+      (fp (gymnast-fingerprint contract)))
+    (make-gymnast-plan-node id class recipe sorted-inputs sorted-depends
+      target model sorted-write sorted-caps sorted-obs sorted-proh fp)))
 
-(defun gymnast-plan-node-p (x) (gymnast-tagged-p 'node-contract x))
 (defun gymnast-plan-node-field (node key)
-  (gymnast-assoc-value key (cdr node)))
-(defun gymnast-plan-node-id (node) (gymnast-plan-node-field node 'id))
+  (record-ref node key))
+
+;;; Plan container accessors (plan stays as an alist).
 
 (defun gymnast-plan-field (plan key)
   (gymnast-assoc-value key (cdr plan)))

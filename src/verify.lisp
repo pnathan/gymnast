@@ -253,10 +253,10 @@
 ;;; state transitions match the reference model.
 
 (defun gymnast-compare-trace-step (reference-step impl-step)
-  (let* ((ref-post (gymnast-assoc-value 'post-state (cdr reference-step)))
-      (impl-post (gymnast-assoc-value 'post-state (cdr impl-step)))
-      (ref-outcome (gymnast-assoc-value 'outcome (cdr reference-step)))
-      (impl-outcome (gymnast-assoc-value 'outcome (cdr impl-step))))
+  (let* ((ref-post (gymnast-trace-step-post-state reference-step))
+      (impl-post (gymnast-trace-step-post-state impl-step))
+      (ref-outcome (gymnast-trace-step-outcome reference-step))
+      (impl-outcome (gymnast-trace-step-outcome impl-step)))
     (cond
       ((not (equal ref-outcome impl-outcome))
         (list 'divergence
@@ -329,14 +329,14 @@
       (list 'divergence-type div-type)
       (list 'operation
         (if step
-          (gymnast-assoc-value 'transition-id (cdr step))
+          (gymnast-trace-step-transition-id step)
           nil))
       (list 'actor
-        (if step (gymnast-assoc-value 'actor (cdr step)) nil))
+        (if step (gymnast-trace-step-actor step) nil))
       (list 'input
-        (if step (gymnast-assoc-value 'input (cdr step)) nil))
+        (if step (gymnast-trace-step-input step) nil))
       (list 'pre-state
-        (if step (gymnast-assoc-value 'pre-state (cdr step)) nil))
+        (if step (gymnast-trace-step-pre-state step) nil))
       (list 'expected
         (gymnast-assoc-value 'reference (cdr divergence)))
       (list 'actual

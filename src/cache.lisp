@@ -13,6 +13,8 @@
 
 (def $gymnast-cache-schema "gymnast.cache/0.1")
 
+(defrecord gymnast-cache-entry schema key node-id candidate evidence timestamp)
+
 ;;; Cache key construction.
 ;;;
 ;;; A cache key is a fingerprint over the full synthesis context
@@ -42,16 +44,11 @@
 ;;; Cache entries.
 
 (defun gymnast-cache-entry (key node-id candidate evidence timestamp)
-  (list 'cache-entry
-    (list 'schema $gymnast-cache-schema)
-    (list 'key key)
-    (list 'node-id node-id)
-    (list 'candidate candidate)
-    (list 'evidence evidence)
-    (list 'timestamp timestamp)))
+  (make-gymnast-cache-entry $gymnast-cache-schema key node-id
+    candidate evidence timestamp))
 
 (defun gymnast-cache-entry-field (entry key)
-  (gymnast-assoc-value key (cdr entry)))
+  (record-ref entry key))
 
 ;;; In-memory cache store.
 ;;;

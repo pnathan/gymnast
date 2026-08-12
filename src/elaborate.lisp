@@ -169,7 +169,7 @@
       (list (gymnast-diagnostic
           'error 'invalid-surface module-name
           (if (gymnast-invalid-surface-p surface)
-            (caddr surface)
+            (gymnast-invalid-surface-message surface)
             "module child did not produce a declaration")
           surface)))
     (let* ((kind (gymnast-surface-kind surface))

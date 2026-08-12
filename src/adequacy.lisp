@@ -9,6 +9,13 @@
 
 (def $gymnast-adequacy-schema "gymnast.adequacy/0.1")
 
+(defrecord gymnast-mutant id class description mutator critical)
+
+(defrecord gymnast-mutant-result mutant-id class critical killed
+  detecting-obligations description)
+
+(defrecord gymnast-fault-scenario name type after expected)
+
 ;;; Mutation operators.
 ;;;
 ;;; Each mutant modifies a specific aspect of the transition system
@@ -16,15 +23,10 @@
 ;;; to the IR, which is then re-verified.
 
 (defun gymnast-mutant (id class description mutator)
-  (list 'mutant
-    (list 'id id)
-    (list 'class class)
-    (list 'description description)
-    (list 'mutator mutator)
-    (list 'critical t)))
+  (make-gymnast-mutant id class description mutator t))
 
 (defun gymnast-mutant-field (mutant key)
-  (gymnast-assoc-value key (cdr mutant)))
+  (record-ref mutant key))
 
 ;;; Built-in mutation operators for the Todo specification.
 
@@ -199,11 +201,7 @@
 ;;; Fault injection scenarios.
 
 (defun gymnast-make-fault-scenario (name fault-type after)
-  (list 'fault-scenario
-    (list 'name name)
-    (list 'type fault-type)
-    (list 'after after)
-    (list 'expected 'detected)))
+  (make-gymnast-fault-scenario name fault-type after 'detected))
 
 (defun gymnast-standard-fault-scenarios ()
   (list
@@ -237,16 +235,15 @@
               (gymnast-verification-result-field r 'obligation-id))
             failed)
           nil)))
-    (list 'mutant-result
-      (list 'mutant-id (gymnast-mutant-field mutant 'id))
-      (list 'class (gymnast-mutant-field mutant 'class))
-      (list 'critical (gymnast-mutant-field mutant 'critical))
-      (list 'killed killed)
-      (list 'detecting-obligations detecting)
-      (list 'description (gymnast-mutant-field mutant 'description)))))
+    (make-gymnast-mutant-result
+      (gymnast-mutant-id mutant)
+      (gymnast-mutant-class mutant)
+      (gymnast-mutant-critical mutant)
+      killed detecting
+      (gymnast-mutant-description mutant))))
 
 (defun gymnast-mutant-result-field (result key)
-  (gymnast-assoc-value key (cdr result)))
+  (record-ref result key))
 
 (defun gymnast-run-campaign (ir mutants)
   (let* ((results (mapcar
