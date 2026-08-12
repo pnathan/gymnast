@@ -289,7 +289,7 @@
     (requires (<= (length request/body) 280))
     (requires (if request/reply-to (exists? tweets request/reply-to) true))
     (requires (if request/reply-to
-      (not (blocked-by? request/reply-to/author user)) true))
+        (not (blocked-by? request/reply-to/author user)) true))
     (ensures (= post (insert-tweet pre request result)))
     (ensures (= result/author user/id))
     (returns result)
