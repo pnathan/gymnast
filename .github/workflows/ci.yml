@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lamedh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build pinned Lamedh
+        run: scripts/bootstrap-lamedh.sh
+      - name: Format check
+        run: .tools/bin/lamedh --fmt-check src tests examples
+      - name: Lisp tests
+        run: .tools/bin/lamedh --test tests
+      - name: Elaborate Todo
+        run: bin/gymnast check examples/todo.lisp todo-spec
+      - name: Reproducible compilation
+        run: |
+          bin/gymnast compile examples/todo.lisp todo-spec build/one
+          bin/gymnast compile examples/todo.lisp todo-spec build/two
+          diff -ru build/one build/two
+

@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+if [ -n "${LAMEDH_BIN:-}" ]; then
+  lamedh_bin=$LAMEDH_BIN
+elif [ -x "$repo_dir/.tools/bin/lamedh" ]; then
+  lamedh_bin=$repo_dir/.tools/bin/lamedh
+elif command -v lamedh >/dev/null 2>&1; then
+  lamedh_bin=$(command -v lamedh)
+else
+  echo "gymnast: lamedh not found; run scripts/bootstrap-lamedh.sh" >&2
+  exit 127
+fi
+
+cd "$repo_dir"
+exec "$lamedh_bin" src/cli.lisp "$@"
+
