@@ -14,6 +14,7 @@
 (include "verify.lisp")
 (include "cache.lisp")
 (include "assembly.lisp")
+(include "adequacy.lisp")
 (include "serialize.lisp")
 
 (defun gymnast-compile (surface)

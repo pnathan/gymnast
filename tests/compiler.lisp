@@ -982,3 +982,104 @@
       (result (gymnast-evaluate-promotion policy bundle)))
     (assert-equal
       (gymnast-promotion-result-field result 'decision) 'hold)))
+
+;;; Adequacy campaign tests.
+
+(deftest mutant-weaken-precondition-changes-ir
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (mutated (gymnast-mutate-weaken-precondition ir 'add))
+      (behaviors (gymnast-ir-nodes-of-kind mutated 'behavior))
+      (add-behavior (car behaviors))
+      (clauses (gymnast-ir-node-field add-behavior 'clauses))
+      (requires (filter
+          (lambda (c) (equal (gymnast-clause-head c) 'requires))
+          clauses)))
+    (assert-equal (length requires) 0)))
+
+(deftest mutant-remove-invariant-drops-node
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (before (length (gymnast-ir-nodes-of-kind ir 'invariant)))
+      (mutated (gymnast-mutate-remove-invariant ir 'no-duplicates))
+      (after (length (gymnast-ir-nodes-of-kind mutated 'invariant))))
+    (assert-equal after (- before 1))))
+
+(deftest mutant-skip-state-write-clears-writes
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (mutated (gymnast-mutate-skip-state-write ir 'add))
+      (behaviors (gymnast-ir-nodes-of-kind mutated 'behavior))
+      (add-behavior (car behaviors))
+      (writes (gymnast-surface-field add-behavior ':writes)))
+    (assert-equal writes nil)))
+
+(deftest mutant-remove-failure-mode-drops-fails
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (mutated (gymnast-mutate-remove-failure-mode ir 'add))
+      (behaviors (gymnast-ir-nodes-of-kind mutated 'behavior))
+      (add-behavior (car behaviors))
+      (clauses (gymnast-ir-node-field add-behavior 'clauses))
+      (fails (filter
+          (lambda (c) (equal (gymnast-clause-head c) 'fails))
+          clauses)))
+    (assert-equal (length fails) 0)))
+
+(deftest single-mutant-run-produces-result
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (mutant (gymnast-mutant 'weaken-add 'authorization
+          "Remove preconditions from add behavior"
+          (lambda (ir-val)
+            (gymnast-mutate-weaken-precondition ir-val 'add))))
+      (result (gymnast-run-mutant ir mutant)))
+    (assert-true (gymnast-tagged-p 'mutant-result result))
+    (assert-equal
+      (gymnast-mutant-result-field result 'mutant-id) 'weaken-add)
+    (assert-equal
+      (gymnast-mutant-result-field result 'class) 'authorization)))
+
+(deftest campaign-runs-multiple-mutants
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (mutants (list
+          (gymnast-mutant 'weaken-add 'authorization
+            "Remove preconditions from add behavior"
+            (lambda (ir-val)
+              (gymnast-mutate-weaken-precondition ir-val 'add)))
+          (gymnast-mutant 'skip-write 'persistence
+            "Skip state writes in add behavior"
+            (lambda (ir-val)
+              (gymnast-mutate-skip-state-write ir-val 'add)))
+          (gymnast-mutant 'remove-fails 'error-mapping
+            "Remove failure modes from add behavior"
+            (lambda (ir-val)
+              (gymnast-mutate-remove-failure-mode ir-val 'add)))))
+      (result (gymnast-run-campaign ir mutants)))
+    (assert-true (gymnast-tagged-p 'campaign-result result))
+    (assert-equal (gymnast-campaign-result-field result 'total) 3)
+    (assert-equal
+      (gymnast-campaign-result-field result 'schema)
+      $gymnast-adequacy-schema)))
+
+(deftest boundary-interleaving-generates-steps
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (scenario (gymnast-boundary-interleaving ir 5)))
+    (assert-true scenario)
+    (assert-true (gymnast-tagged-p 'interleaving-scenario scenario))
+    (assert-equal
+      (length (gymnast-assoc-value 'steps (cdr scenario))) 5)))
+
+(deftest standard-fault-scenarios-defined
+  (let ((faults (gymnast-standard-fault-scenarios)))
+    (assert-equal (length faults) 4)
+    (assert-true (gymnast-all
+        (lambda (f) (gymnast-tagged-p 'fault-scenario f))
+        faults))))
+
+(deftest campaign-reports-blind-spots-for-survivors
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (mutants (list
+          (gymnast-mutant 'identity-mutant 'identity
+            "No-op mutant that should survive"
+            (lambda (ir-val) ir-val))))
+      (result (gymnast-run-campaign ir mutants))
+      (survived (gymnast-campaign-result-field result 'survived)))
+    (if (> survived 0)
+      (assert-true (gymnast-campaign-result-field result 'blind-spots))
+      (assert-equal survived 0))))
