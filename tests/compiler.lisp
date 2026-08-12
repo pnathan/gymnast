@@ -31,7 +31,32 @@
     (property round-trip
       :generate ((item valid-item))
       :execute (sequence (add item) (list))
-      :must (contains? result item))))
+      :must (contains? result item))
+    (scenario add-and-verify
+      (given user (authenticated-user))
+      (when (add user new-item))
+      (then succeeds)
+      (when (list user))
+      (then (contains? result new-item)))
+    (concurrency concurrent-adds
+      :actors 10
+      :schedule adversarial
+      :must (= lost-updates 0))
+    (fault restart-durability
+      :after acknowledged-write
+      :inject restart
+      :must (read-your-acknowledged-write))
+    (coverage
+      :every-operation true
+      :every-error true
+      :every-transition true
+      :every-invariant true
+      :boundaries true)
+    (execution
+      :clock virtual
+      :randomness seeded
+      :network controlled
+      :timezone "UTC")))
 
 (deftest fexpr-captures-unevaluated-type-forms
   (let ((decl (type Captured :record ((value NotABoundVariable)))))
@@ -552,3 +577,165 @@
 (deftest safe-read-handles-empty-input
   (assert-equal (gymnast-safe-read "") nil)
   (assert-equal (gymnast-safe-read nil) nil))
+
+;;; Verification obligation tests.
+
+(deftest obligation-lowering-extracts-all-clause-types
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (obligations (gymnast-lower-all-obligations ir)))
+    (assert-true (> (length obligations) 0))
+    (let ((kinds (mapcar
+            (lambda (ob) (gymnast-obligation-field ob 'kind))
+            obligations)))
+      (assert-true (member 'property kinds))
+      (assert-true (member 'scenario kinds))
+      (assert-true (member 'concurrency kinds))
+      (assert-true (member 'fault kinds))
+      (assert-true (member 'coverage kinds))
+      (assert-true (member 'invariant kinds))
+      (assert-true (member 'constraint kinds)))))
+
+(deftest obligation-lowering-produces-correct-counts
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (obligations (gymnast-lower-all-obligations ir)))
+    (let ((acceptance-obs (gymnast-lower-acceptance-obligations ir))
+        (invariant-obs (gymnast-lower-invariant-obligations ir))
+        (constraint-obs (gymnast-lower-constraint-obligations ir)))
+      (assert-equal (length acceptance-obs) 5)
+      (assert-equal (length invariant-obs) 1)
+      (assert-equal (length constraint-obs) 1)
+      (assert-equal (length obligations) 7))))
+
+(deftest execution-environment-extraction
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (acc-nodes (gymnast-ir-nodes-of-kind ir 'acceptance))
+      (env (gymnast-extract-execution-env (car acc-nodes))))
+    (assert-equal (gymnast-env-field env 'clock) 'virtual)
+    (assert-equal (gymnast-env-field env 'randomness) 'seeded)
+    (assert-equal (gymnast-env-field env 'network) 'controlled)
+    (assert-equal (gymnast-env-field env 'timezone) "UTC")
+    (assert-true (gymnast-env-deterministic-p env))))
+
+(deftest non-deterministic-env-produces-warnings
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (env (list 'execution-environment
+          (list 'clock 'system)
+          (list 'randomness 'system)
+          (list 'network 'system)
+          (list 'locale "en-US")
+          (list 'timezone "UTC")))
+      (diags (gymnast-env-diagnostics env "test-acceptance")))
+    (assert-equal (length diags) 3)))
+
+(deftest property-obligation-has-execute-and-assertion
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (obligations (gymnast-lower-acceptance-obligations ir))
+      (prop (car (filter
+            (lambda (ob)
+              (equal (gymnast-obligation-field ob 'kind) 'property))
+            obligations))))
+    (assert-true prop)
+    (assert-true (gymnast-obligation-field prop 'execute))
+    (assert-true (gymnast-obligation-field prop 'assertion))
+    (assert-equal (gymnast-obligation-field prop 'name) 'round-trip)))
+
+(deftest scenario-obligation-has-steps
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (obligations (gymnast-lower-acceptance-obligations ir))
+      (scenario (car (filter
+            (lambda (ob)
+              (equal (gymnast-obligation-field ob 'kind) 'scenario))
+            obligations))))
+    (assert-true scenario)
+    (assert-true (gymnast-obligation-field scenario 'steps))
+    (assert-equal (gymnast-obligation-field scenario 'name) 'add-and-verify)))
+
+(deftest concurrency-obligation-has-actor-count
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (obligations (gymnast-lower-acceptance-obligations ir))
+      (conc (car (filter
+            (lambda (ob)
+              (equal (gymnast-obligation-field ob 'kind) 'concurrency))
+            obligations))))
+    (assert-true conc)
+    (assert-equal (gymnast-obligation-field conc 'actors) 10)
+    (assert-equal (gymnast-obligation-field conc 'schedule) 'adversarial)))
+
+(deftest fault-obligation-has-injection-spec
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (obligations (gymnast-lower-acceptance-obligations ir))
+      (fault (car (filter
+            (lambda (ob)
+              (equal (gymnast-obligation-field ob 'kind) 'fault))
+            obligations))))
+    (assert-true fault)
+    (assert-equal (gymnast-obligation-field fault 'inject) 'restart)
+    (assert-equal (gymnast-obligation-field fault 'after) 'acknowledged-write)))
+
+(deftest invariant-obligation-checks-initial-state
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (obligations (gymnast-lower-invariant-obligations ir))
+      (inv (car obligations)))
+    (assert-true inv)
+    (assert-equal (gymnast-obligation-field inv 'kind) 'invariant)
+    (let ((result (gymnast-verify-invariant-obligation ir inv)))
+      (assert-equal
+        (gymnast-verification-result-field result 'status) 'passed))))
+
+(deftest verification-bundle-compiles
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (bundle (gymnast-compile-verification ir)))
+    (assert-true (gymnast-tagged-p 'verification-bundle bundle))
+    (assert-equal
+      (gymnast-verification-bundle-field bundle 'schema)
+      $gymnast-verify-schema)
+    (let ((summary (gymnast-verification-bundle-field bundle 'summary)))
+      (assert-true (> (gymnast-assoc-value 'total summary) 0)))))
+
+(deftest trace-equivalence-detects-matching-traces
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (steps (list (list "api/add" 'user 'item1)))
+      (trace-a (gymnast-execute-trace ir steps))
+      (trace-b (gymnast-execute-trace ir steps)))
+    (assert-true (gymnast-trace-equivalent-p trace-a trace-b))))
+
+(deftest trace-equivalence-detects-divergence
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (trace-a (gymnast-execute-trace ir
+          (list (list "api/add" 'user 'item1))))
+      (trace-b (gymnast-execute-trace ir
+          (list (list "api/add" 'user 'item2)))))
+    (assert-false (gymnast-trace-equivalent-p trace-a trace-b))))
+
+(deftest normalized-counterexample-has-required-fields
+  (let ((div (list 'divergence
+          (list 'type 'outcome-mismatch)
+          (list 'reference '(succeeded))
+          (list 'implementation '(failed forbidden))
+          (list 'step (list 'trace-step
+              (list 'transition-id "api/add")
+              (list 'actor 'user)
+              (list 'input 'item)
+              (list 'pre-state nil)
+              (list 'post-state nil)
+              (list 'result nil)
+              (list 'outcome '(failed forbidden)))))))
+    (let ((cx (gymnast-normalize-counterexample div "test-ob")))
+      (assert-true (gymnast-tagged-p 'normalized-counterexample cx))
+      (assert-equal
+        (gymnast-assoc-value 'obligation-id (cdr cx)) "test-ob")
+      (assert-equal
+        (gymnast-assoc-value 'operation (cdr cx)) "api/add")
+      (assert-equal
+        (gymnast-assoc-value 'divergence-type (cdr cx)) 'outcome-mismatch))))
+
+(deftest coverage-analysis-counts-obligations
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (obligations (gymnast-lower-all-obligations ir))
+      (coverage (gymnast-coverage-gaps ir obligations)))
+    (assert-true coverage)
+    (assert-true (gymnast-tagged-p 'coverage-analysis coverage))
+    (assert-true (>= (gymnast-assoc-value 'property-obligations
+            (cdr coverage)) 1))
+    (assert-true (>= (gymnast-assoc-value 'scenario-obligations
+            (cdr coverage)) 1))))
