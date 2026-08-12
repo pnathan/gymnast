@@ -27,24 +27,24 @@
   (type TaskState :enum (active trashed))
   (type Due
     :variant ((date-only LocalDate)
-              (at ZonedDateTime)))
+      (at ZonedDateTime)))
 
   (type TodoList
     :record ((id ListId)
-             (title (Text :min 1 :max 200))
-             (owner UserId)
-             (version Version)))
+      (title (Text :min 1 :max 200))
+      (owner UserId)
+      (version Version)))
 
   (type Task
     :record ((id TaskId)
-             (list ListId)
-             (title (Text :min 1 :max 500))
-             (notes (Text :max 20000))
-             (status TaskStatus)
-             (state TaskState)
-             (due (Optional Due))
-             (assignee (Optional UserId))
-             (version Version)))
+      (list ListId)
+      (title (Text :min 1 :max 500))
+      (notes (Text :max 20000))
+      (status TaskStatus)
+      (state TaskState)
+      (due (Optional Due))
+      (assignee (Optional UserId))
+      (version Version)))
 
   (component todo-app
     :responsibility "Manage persistent, shareable Todo lists"
@@ -119,26 +119,26 @@
   (invariant sharing-limit
     :scope todo-state
     :always (forall ((list TodoList))
-              (<= (other-principal-count list) 256)))
+      (<= (other-principal-count list) 256)))
 
   (constraint collaborative-capacity
     :class workload
     :scope todo-service
     :under (workload
-             :virtual-users 500
-             :duration (minutes 30)
-             :read-p95 (milliseconds 300)
-             :write-p95 (milliseconds 500))
+      :virtual-users 500
+      :duration (minutes 30)
+      :read-p95 (milliseconds 300)
+      :write-p95 (milliseconds 500))
     :must (and (= lost-updates 0)
-               (= invariant-violations 0)))
+      (= invariant-violations 0)))
 
   (synthesis prototype
     :target (lamedh :track "0.5")
     :platform gymnast-reference-platform-v1
     :model (small-code-model
-             :class nano
-             :temperature 0
-             :max-attempts 3)
+      :class nano
+      :temperature 0
+      :max-attempts 3)
     :attempts 3
     :must-not (invent-product-semantics add-unpinned-dependencies))
 
@@ -147,7 +147,7 @@
     (property create-then-read
       :generate ((actor authenticated-editor) (task valid-task))
       :execute (sequence (create-task actor task)
-                         (query-tasks actor task/list))
+        (query-tasks actor task/list))
       :must (contains-equivalent? result task))
     (property viewer-cannot-mutate
       :generate ((actor authenticated-viewer) (task valid-task))

@@ -38,7 +38,7 @@
     (assert-equal (gymnast-surface-kind decl) 'type)
     (assert-equal (gymnast-surface-mechanism decl) 'fexpr)
     (assert-equal (gymnast-surface-operands decl)
-                  '(:record ((value NotABoundVariable))))))
+      '(:record ((value NotABoundVariable))))))
 
 (deftest module-is-a-vau-capture-boundary
   (assert-equal (gymnast-surface-kind gymnast-test-spec) 'module)
@@ -58,24 +58,24 @@
 
 (deftest compilation-is-byte-stable-as-data
   (let ((a (gymnast-compile gymnast-test-spec))
-        (b (gymnast-compile gymnast-test-spec)))
+      (b (gymnast-compile gymnast-test-spec)))
     (assert-equal a b)
     (assert-equal (prin1-to-string a) (prin1-to-string b))))
 
 (deftest planner-produces-complete-typed-dag
   (let* ((ir (gymnast-elaborate gymnast-test-spec))
-         (plan (gymnast-plan ir)))
+      (plan (gymnast-plan ir)))
     (assert-equal (length (gymnast-plan-field plan 'nodes)) 8)
     (assert-false (gymnast-has-errors-p
-                    (gymnast-plan-field plan 'diagnostics)))
+        (gymnast-plan-field plan 'diagnostics)))
     (assert-true
       (gymnast-find-plan-node plan
         (gymnast-plan-id ir "acceptance-harness")))))
 
 (deftest every-plan-node-has-a-stable-work-packet
   (let* ((ir (gymnast-elaborate gymnast-test-spec))
-         (plan (gymnast-plan ir))
-         (prompts (gymnast-compile-prompts ir plan)))
+      (plan (gymnast-plan ir))
+      (prompts (gymnast-compile-prompts ir plan)))
     (assert-equal (length prompts) (length (gymnast-plan-field plan 'nodes)))
     (assert-true
       (gymnast-all
@@ -84,29 +84,29 @@
 
 (deftest candidate-firewall-enforces-write-set
   (let* ((ir (gymnast-elaborate gymnast-test-spec))
-         (plan (gymnast-plan ir))
-         (node (gymnast-find-plan-node
-                 plan (gymnast-plan-id ir "interface-contracts")))
-         (good
-           (list 'candidate
-                 (list 'schema $gymnast-candidate-schema)
-                 (list 'node-id (gymnast-plan-node-id node))
-                 (list 'files
-                       (list (list "generated/interfaces/contracts.lisp"
-                                   "(def api-contract 'ok)")))
-                 (list 'implements (gymnast-plan-node-field node 'inputs))
-                 (list 'edge-uses nil)
-                 (list 'assumptions nil)
-                 (list 'unresolved nil)))
-         (bad
-           (gymnast-put-assoc
-             'files (list (list "src/compiler.lisp" "malicious")) (cdr good))))
+      (plan (gymnast-plan ir))
+      (node (gymnast-find-plan-node
+          plan (gymnast-plan-id ir "interface-contracts")))
+      (good
+        (list 'candidate
+          (list 'schema $gymnast-candidate-schema)
+          (list 'node-id (gymnast-plan-node-id node))
+          (list 'files
+            (list (list "generated/interfaces/contracts.lisp"
+                "(def api-contract 'ok)")))
+          (list 'implements (gymnast-plan-node-field node 'inputs))
+          (list 'edge-uses nil)
+          (list 'assumptions nil)
+          (list 'unresolved nil)))
+      (bad
+        (gymnast-put-assoc
+          'files (list (list "src/compiler.lisp" "malicious")) (cdr good))))
     (assert-true (gymnast-candidate-valid-p node good))
     (assert-false (gymnast-candidate-valid-p node (cons 'candidate bad)))))
 
 (deftest unresolved-product-decisions-stop-elaboration
   (let* ((surface
-           (module blocked
-             (constraint choice :class policy :status unresolved)))
-         (ir (gymnast-elaborate surface)))
+        (module blocked
+          (constraint choice :class policy :status unresolved)))
+      (ir (gymnast-elaborate surface)))
     (assert-true (gymnast-has-errors-p (gymnast-ir-field ir 'diagnostics)))))

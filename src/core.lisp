@@ -19,20 +19,20 @@
 
 (defun gymnast-all (predicate xs)
   (cond ((null xs) t)
-        ((funcall predicate (car xs)) (gymnast-all predicate (cdr xs)))
-        (t nil)))
+    ((funcall predicate (car xs)) (gymnast-all predicate (cdr xs)))
+    (t nil)))
 
 (defun gymnast-any (predicate xs)
   (cond ((null xs) nil)
-        ((funcall predicate (car xs)) t)
-        (t (gymnast-any predicate (cdr xs)))))
+    ((funcall predicate (car xs)) t)
+    (t (gymnast-any predicate (cdr xs)))))
 
 (defun gymnast-unique (xs)
   (if (null xs)
-      nil
-      (cons (car xs)
-            (gymnast-unique
-              (filter (lambda (x) (not (equal x (car xs)))) (cdr xs))))))
+    nil
+    (cons (car xs)
+      (gymnast-unique
+        (filter (lambda (x) (not (equal x (car xs)))) (cdr xs))))))
 
 (defun gymnast-symbol-string (x)
   (string-downcase (princ-to-string x)))
@@ -45,18 +45,18 @@
 
 (defun gymnast-diagnostic (severity code subject message details)
   (list 'diagnostic
-        (list 'severity severity)
-        (list 'code code)
-        (list 'subject subject)
-        (list 'message message)
-        (list 'details details)))
+    (list 'severity severity)
+    (list 'code code)
+    (list 'subject subject)
+    (list 'message message)
+    (list 'details details)))
 
 (defun gymnast-diagnostic-field (diagnostic key)
   (gymnast-assoc-value key (cdr diagnostic)))
 
 (defun gymnast-error-diagnostic-p (diagnostic)
   (and (gymnast-tagged-p 'diagnostic diagnostic)
-       (equal (gymnast-diagnostic-field diagnostic 'severity) 'error)))
+    (equal (gymnast-diagnostic-field diagnostic 'severity) 'error)))
 
 (defun gymnast-has-errors-p (diagnostics)
   (gymnast-any #'gymnast-error-diagnostic-p diagnostics))
@@ -87,8 +87,8 @@
 
 (defun gymnast-canonical-fields (fields)
   (sort fields (lambda (a b)
-                 (string-lessp (gymnast-symbol-string (car a))
-                               (gymnast-symbol-string (car b))))))
+      (string-lessp (gymnast-symbol-string (car a))
+        (gymnast-symbol-string (car b))))))
 
 (defun gymnast-canonical-data (x)
   (cond
@@ -102,15 +102,15 @@
 
 (defun gymnast-fnv1a-step (hash chars)
   (if (null chars)
-      hash
-      (gymnast-fnv1a-step
-        (* (logxor hash (char-code (car chars))) 1099511628211)
-        (cdr chars))))
+    hash
+    (gymnast-fnv1a-step
+      (* (logxor hash (char-code (car chars))) 1099511628211)
+      (cdr chars))))
 
 (defun gymnast-fingerprint-string (text)
   (clear-flag 'overflow)
   (let ((value (gymnast-fnv1a-step -3750763034362895579
-                                    (string->list text))))
+          (string->list text))))
     (clear-flag 'overflow)
     (concat "fnv1a64:" (princ-to-string value))))
 
@@ -119,12 +119,12 @@
 
 (defun gymnast-ir-node (id kind name fields clauses mechanism)
   (list 'ir-node
-        (list 'id id)
-        (list 'kind kind)
-        (list 'name name)
-        (list 'fields (gymnast-canonical-fields fields))
-        (list 'clauses clauses)
-        (list 'surface-mechanism mechanism)))
+    (list 'id id)
+    (list 'kind kind)
+    (list 'name name)
+    (list 'fields (gymnast-canonical-fields fields))
+    (list 'clauses clauses)
+    (list 'surface-mechanism mechanism)))
 
 (defun gymnast-ir-node-p (x) (gymnast-tagged-p 'ir-node x))
 (defun gymnast-ir-node-field (node key)
@@ -134,47 +134,47 @@
 
 (defun gymnast-sort-ir-nodes (nodes)
   (sort nodes (lambda (a b)
-                (string-lessp (gymnast-ir-node-id a)
-                              (gymnast-ir-node-id b)))))
+      (string-lessp (gymnast-ir-node-id a)
+        (gymnast-ir-node-id b)))))
 
 (defun gymnast-ir-field (ir key)
   (gymnast-assoc-value key (cdr ir)))
 
 (defun gymnast-ir-all-nodes (ir)
   (append (gymnast-ir-field ir 'design)
-          (gymnast-ir-field ir 'transitions)
-          (gymnast-ir-field ir 'obligations)
-          (gymnast-ir-field ir 'synthesis)))
+    (gymnast-ir-field ir 'transitions)
+    (gymnast-ir-field ir 'obligations)
+    (gymnast-ir-field ir 'synthesis)))
 
 (defun gymnast-ir-nodes-of-kind (ir kind)
   (filter (lambda (node) (equal (gymnast-ir-node-kind node) kind))
-          (gymnast-ir-all-nodes ir)))
+    (gymnast-ir-all-nodes ir)))
 
 (defun gymnast-ir-node-ids (nodes)
   (mapcar #'gymnast-ir-node-id nodes))
 
 (defun gymnast-find-ir-node (ir id)
   (let ((matches
-          (filter (lambda (node) (equal (gymnast-ir-node-id node) id))
-                  (gymnast-ir-all-nodes ir))))
+        (filter (lambda (node) (equal (gymnast-ir-node-id node) id))
+          (gymnast-ir-all-nodes ir))))
     (if matches (car matches) nil)))
 
 (defun gymnast-plan-node (id class recipe inputs depends-on target model
-                             may-write capabilities obligations prohibitions)
+    may-write capabilities obligations prohibitions)
   (let* ((contract
-           (list 'node-contract
-                 (list 'id id)
-                 (list 'class class)
-                 (list 'recipe recipe)
-                 (list 'inputs (sort inputs #'string-lessp))
-                 (list 'depends-on (sort depends-on #'string-lessp))
-                 (list 'target target)
-                 (list 'model model)
-                 (list 'may-write (sort may-write #'string-lessp))
-                 (list 'capabilities (sort capabilities #'gymnast-canonical-less-p))
-                 (list 'obligations (sort obligations #'gymnast-canonical-less-p))
-                 (list 'prohibitions (sort prohibitions #'gymnast-canonical-less-p))))
-         (fingerprint (gymnast-fingerprint contract)))
+        (list 'node-contract
+          (list 'id id)
+          (list 'class class)
+          (list 'recipe recipe)
+          (list 'inputs (sort inputs #'string-lessp))
+          (list 'depends-on (sort depends-on #'string-lessp))
+          (list 'target target)
+          (list 'model model)
+          (list 'may-write (sort may-write #'string-lessp))
+          (list 'capabilities (sort capabilities #'gymnast-canonical-less-p))
+          (list 'obligations (sort obligations #'gymnast-canonical-less-p))
+          (list 'prohibitions (sort prohibitions #'gymnast-canonical-less-p))))
+      (fingerprint (gymnast-fingerprint contract)))
     (append contract (list (list 'fingerprint fingerprint)))))
 
 (defun gymnast-plan-node-p (x) (gymnast-tagged-p 'node-contract x))
@@ -187,6 +187,6 @@
 
 (defun gymnast-find-plan-node (plan id)
   (let ((matches
-          (filter (lambda (node) (equal (gymnast-plan-node-id node) id))
-                  (gymnast-plan-field plan 'nodes))))
+        (filter (lambda (node) (equal (gymnast-plan-node-id node) id))
+          (gymnast-plan-field plan 'nodes))))
     (if matches (car matches) nil)))

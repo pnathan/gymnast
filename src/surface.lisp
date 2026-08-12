@@ -10,46 +10,46 @@
 
 (defun gymnast-trusted-surface-head-p (head)
   (or (member head $gymnast-kernel-heads)
-      (getp head "gymnast.surface-macro")))
+    (getp head "gymnast.surface-macro")))
 
 (defun gymnast-trusted-surface-form-p (form)
   (and (consp form)
-       (symbolp (car form))
-       (gymnast-trusted-surface-head-p (car form))))
+    (symbolp (car form))
+    (gymnast-trusted-surface-head-p (car form))))
 
 (defun gymnast-container-parts (forms attributes children)
   (cond
     ((null forms) (list attributes children))
     ((gymnast-keyword-p (car forms))
-     (if (null (cdr forms))
-         (list attributes
-               (append children
-                       (list (gymnast-make-invalid-surface
-                               (car forms)
-                               "attribute is missing its value"))))
-         (gymnast-container-parts
-           (cdr (cdr forms))
-           (append attributes (list (car forms) (cadr forms)))
-           children)))
+      (if (null (cdr forms))
+        (list attributes
+          (append children
+            (list (gymnast-make-invalid-surface
+                (car forms)
+                "attribute is missing its value"))))
+        (gymnast-container-parts
+          (cdr (cdr forms))
+          (append attributes (list (car forms) (cadr forms)))
+          children)))
     (t (gymnast-container-parts
-         (cdr forms) attributes (append children (list (car forms)))))))
+        (cdr forms) attributes (append children (list (car forms)))))))
 
 (defun gymnast-eval-surface-forms (forms env)
   (if (null forms)
-      nil
-      (let* ((form (car forms))
-             (value
-               (if (gymnast-trusted-surface-form-p form)
-                   (eval form env)
-                   (gymnast-make-invalid-surface
-                     form
-                     "module body admits only kernel forms and trusted surface macros"))))
-        (cons value (gymnast-eval-surface-forms (cdr forms) env)))))
+    nil
+    (let* ((form (car forms))
+        (value
+          (if (gymnast-trusted-surface-form-p form)
+            (eval form env)
+            (gymnast-make-invalid-surface
+              form
+              "module body admits only kernel forms and trusted surface macros"))))
+      (cons value (gymnast-eval-surface-forms (cdr forms) env)))))
 
 (defun gymnast-surface-leaf (kind operands mechanism)
   (if (null operands)
-      (gymnast-make-invalid-surface kind "declaration requires a name")
-      (gymnast-make-surface kind (car operands) (cdr operands) nil mechanism)))
+    (gymnast-make-invalid-surface kind "declaration requires a name")
+    (gymnast-make-surface kind (car operands) (cdr operands) nil mechanism)))
 
 (defexpr import (operands) (gymnast-surface-leaf 'import operands 'fexpr))
 (defexpr application (operands) (gymnast-surface-leaf 'application operands 'fexpr))
@@ -68,13 +68,13 @@
 (defvau module (operands env)
   "Capture one module. Only trusted declaration forms are evaluated."
   (if (null operands)
-      (gymnast-make-invalid-surface 'module "module requires a name")
-      (let* ((name (car operands))
-             (parts (gymnast-container-parts (cdr operands) nil nil))
-             (attributes (car parts))
-             (child-forms (cadr parts))
-             (children (gymnast-eval-surface-forms child-forms env)))
-        (gymnast-make-surface 'module name attributes children 'vau))))
+    (gymnast-make-invalid-surface 'module "module requires a name")
+    (let* ((name (car operands))
+        (parts (gymnast-container-parts (cdr operands) nil nil))
+        (attributes (car parts))
+        (child-forms (cadr parts))
+        (children (gymnast-eval-surface-forms child-forms env)))
+      (gymnast-make-surface 'module name attributes children 'vau))))
 
 ;;; DEFSPEC is transparent authoring sugar.  It introduces no new semantic
 ;;; form: expansion is a DEF whose value is an ordinary MODULE declaration.
@@ -87,8 +87,8 @@
 
 (defmacro use-profile (name version &rest arguments)
   `(import ,name
-     :version ,version
-     :arguments ,arguments
-     :authority authoritative))
+    :version ,version
+    :arguments ,arguments
+    :authority authoritative))
 
 (putp 'use-profile "gymnast.surface-macro" t)

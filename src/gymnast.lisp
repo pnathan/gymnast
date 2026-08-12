@@ -9,14 +9,14 @@
 
 (defun gymnast-compile (surface)
   (let* ((ir (gymnast-elaborate surface))
-         (plan (gymnast-plan ir))
-         (prompts (gymnast-compile-prompts ir plan))
-         (base
-           (list 'compilation
-                 (list 'schema "gymnast.compilation/0.1")
-                 (list 'ir ir)
-                 (list 'plan plan)
-                 (list 'prompts prompts))))
+      (plan (gymnast-plan ir))
+      (prompts (gymnast-compile-prompts ir plan))
+      (base
+        (list 'compilation
+          (list 'schema "gymnast.compilation/0.1")
+          (list 'ir ir)
+          (list 'plan plan)
+          (list 'prompts prompts))))
     (append base (list (list 'fingerprint (gymnast-fingerprint base))))))
 
 (defun gymnast-compilation-field (compilation key)
