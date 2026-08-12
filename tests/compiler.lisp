@@ -868,3 +868,117 @@
       (assert-equal (length (gymnast-cache-hits results)) 8)
       (assert-equal (length (gymnast-cache-misses results)) 0)))
   (gymnast-cache-clear))
+
+;;; Assembly and evidence bundle tests.
+
+(defun make-test-execution-results (ir plan)
+  (mapcar
+    (lambda (node)
+      (let* ((node-id (gymnast-plan-node-id node))
+          (files (gymnast-plan-node-field node 'may-write)))
+        (list 'run-result
+          (list 'node-id node-id)
+          (list 'status 'succeeded)
+          (list 'candidate
+            (list 'candidate
+              (list 'schema $gymnast-candidate-schema)
+              (list 'node-id node-id)
+              (list 'files
+                (mapcar (lambda (f) (list f "# generated")) files))
+              (list 'implements nil)
+              (list 'edge-uses nil)
+              (list 'assumptions nil)
+              (list 'unresolved nil))))))
+    (gymnast-plan-field plan 'nodes)))
+
+(deftest artifact-collection-from-results
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (results (make-test-execution-results ir plan))
+      (artifacts (gymnast-collect-artifacts results)))
+    (assert-true (> (length artifacts) 0))
+    (let ((first (car artifacts)))
+      (assert-true (gymnast-tagged-p 'artifact first))
+      (assert-true (gymnast-artifact-field first 'path))
+      (assert-true (gymnast-artifact-field first 'digest))
+      (assert-true (gymnast-artifact-field first 'node-id)))))
+
+(deftest artifact-validation-accepts-declared-paths
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (results (make-test-execution-results ir plan))
+      (artifacts (gymnast-collect-artifacts results))
+      (diags (gymnast-validate-artifacts plan artifacts)))
+    (let ((errors (filter #'gymnast-error-diagnostic-p diags)))
+      (assert-equal (length errors) 0))))
+
+(deftest capability-edge-validation
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (diags (gymnast-validate-capability-edges plan)))
+    (assert-equal (length diags) 0)))
+
+(deftest traceability-map-covers-all-ir-nodes
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (results (make-test-execution-results ir plan))
+      (traceability (gymnast-build-traceability-map ir plan results)))
+    (assert-equal (length traceability)
+      (length (gymnast-ir-all-nodes ir)))
+    (let ((first (car traceability)))
+      (assert-true (gymnast-tagged-p 'traceability-entry first))
+      (assert-true
+        (gymnast-traceability-entry-field first 'semantic-id)))))
+
+(deftest dependency-lock-captures-plan-state
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (lock (gymnast-dependency-lock plan)))
+    (assert-true (gymnast-tagged-p 'dependency-lock lock))
+    (assert-equal
+      (gymnast-dependency-lock-field lock 'plan-fingerprint)
+      (gymnast-plan-field plan 'fingerprint))
+    (assert-equal
+      (length (gymnast-dependency-lock-field lock 'node-locks)) 8)))
+
+(deftest evidence-bundle-assembles
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (results (make-test-execution-results ir plan))
+      (verification (gymnast-compile-verification ir))
+      (bundle (gymnast-assemble-bundle ir plan results verification)))
+    (assert-true (gymnast-tagged-p 'evidence-bundle bundle))
+    (assert-equal
+      (gymnast-bundle-field bundle 'schema) $gymnast-bundle-schema)
+    (assert-true (gymnast-bundle-field bundle 'artifacts))
+    (assert-true (gymnast-bundle-field bundle 'traceability))
+    (assert-true (gymnast-bundle-field bundle 'dependency-lock))
+    (assert-true (gymnast-bundle-field bundle 'verification))
+    (let ((summary (gymnast-bundle-field bundle 'summary)))
+      (assert-equal (gymnast-assoc-value 'total-nodes summary) 8)
+      (assert-equal (gymnast-assoc-value 'failed-nodes summary) 0))))
+
+(deftest promotion-policy-evaluates-clean-bundle
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (results (make-test-execution-results ir plan))
+      (verification (gymnast-compile-verification ir))
+      (bundle (gymnast-assemble-bundle ir plan results verification))
+      (policy (gymnast-default-promotion-policy))
+      (result (gymnast-evaluate-promotion policy bundle)))
+    (assert-true (gymnast-tagged-p 'promotion-result result))
+    (assert-equal
+      (gymnast-promotion-result-field result 'decision) 'promote)))
+
+(deftest promotion-holds-on-failed-nodes
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (results (list (list 'run-result
+            (list 'node-id "test")
+            (list 'status 'failed)
+            (list 'candidate nil))))
+      (bundle (gymnast-assemble-bundle ir plan results nil))
+      (policy (gymnast-default-promotion-policy))
+      (result (gymnast-evaluate-promotion policy bundle)))
+    (assert-equal
+      (gymnast-promotion-result-field result 'decision) 'hold)))

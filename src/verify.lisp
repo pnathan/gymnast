@@ -559,10 +559,10 @@
       (list 'obligations obligations)
       (list 'results results)
       (list 'summary
-        (list 'total (length obligations))
-        (list 'passed (length passed))
-        (list 'failed (length failed))
-        (list 'skipped (length skipped)))
+        (list (list 'total (length obligations))
+          (list 'passed (length passed))
+          (list 'failed (length failed))
+          (list 'skipped (length skipped))))
       (list 'coverage coverage)
       (list 'environment-diagnostics env-diags))))
 
