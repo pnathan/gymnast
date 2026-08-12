@@ -190,4 +190,3 @@
           (filter (lambda (node) (equal (gymnast-plan-node-id node) id))
                   (gymnast-plan-field plan 'nodes))))
     (if matches (car matches) nil)))
-

@@ -271,4 +271,3 @@
     (if (gymnast-has-errors-p diagnostics)
         (error (concat "elaboration failed: " (prin1-to-string diagnostics)))
         ir)))
-

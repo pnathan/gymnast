@@ -89,4 +89,3 @@
 (defun gymnast-compile-prompts (ir plan)
   (mapcar (lambda (node) (gymnast-compile-prompt ir plan node))
           (gymnast-plan-field plan 'nodes)))
-

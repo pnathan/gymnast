@@ -16,4 +16,3 @@ fi
 
 cd "$repo_dir"
 exec "$lamedh_bin" src/cli.lisp "$@"
-

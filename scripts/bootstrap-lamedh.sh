@@ -18,4 +18,3 @@ cargo install \
   --package lamedh-cli
 
 "$install_root/bin/lamedh" -s '(list '\''lamedh '\''ready)'
-

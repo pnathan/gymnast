@@ -21,4 +21,3 @@
 
 (defun gymnast-compilation-field (compilation key)
   (gymnast-assoc-value key (cdr compilation)))
-

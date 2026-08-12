@@ -43,18 +43,17 @@
                   nil
                   (list (gymnast-diagnostic
                           'error 'candidate-added-assumptions node-id
-                          "candidate may not add assumptions" 
+                          "candidate may not add assumptions"
                           (gymnast-candidate-field candidate 'assumptions)))))
             (unresolved
               (if (null (gymnast-candidate-field candidate 'unresolved))
                   nil
                   (list (gymnast-diagnostic
                           'error 'candidate-unresolved node-id
-                          "candidate reported an unresolved contract" 
+                          "candidate reported an unresolved contract"
                           (gymnast-candidate-field candidate 'unresolved))))))
        (append wrong-node bad-paths missing-paths assumptions unresolved)))))
 
 (defun gymnast-candidate-valid-p (node candidate)
   (not (gymnast-has-errors-p
          (gymnast-candidate-diagnostics node candidate))))
-

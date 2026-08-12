@@ -23,4 +23,3 @@ jobs:
           bin/gymnast compile examples/todo.lisp todo-spec build/one
           bin/gymnast compile examples/todo.lisp todo-spec build/two
           diff -ru build/one build/two
-

@@ -181,4 +181,3 @@
     (if (gymnast-has-errors-p diagnostics)
         (error (concat "planning failed: " (prin1-to-string diagnostics)))
         plan)))
-

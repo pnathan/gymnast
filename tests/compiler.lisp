@@ -110,4 +110,3 @@
              (constraint choice :class policy :status unresolved)))
          (ir (gymnast-elaborate surface)))
     (assert-true (gymnast-has-errors-p (gymnast-ir-field ir 'diagnostics)))))
-

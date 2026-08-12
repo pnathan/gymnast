@@ -62,4 +62,3 @@
            (exit 2))))))
 
 (gymnast-cli-main *argv*)
-
