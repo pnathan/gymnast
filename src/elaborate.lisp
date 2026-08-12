@@ -1,6 +1,6 @@
 ;;; Surface-to-IR elaboration and closed-world diagnostics.
 
-(def $gymnast-common-fields '(:id :doc :tags))
+(def $gymnast-common-fields '(:id :doc :tags :profile-source))
 
 (defun gymnast-allowed-fields (kind)
   (append
@@ -196,13 +196,20 @@
 (defun gymnast-elaborate-children (module-name children nodes diagnostics)
   (if (null children)
     (list nodes diagnostics)
-    (let* ((result (gymnast-elaborate-declaration module-name (car children)))
+    (let* ((child (car children))
+        (profile-result (if (gymnast-is-profile-import-p child)
+            (gymnast-expand-profile-import module-name child)
+            nil))
+        (extra-children (if profile-result (car profile-result) nil))
+        (profile-diags (if profile-result (cadr profile-result) nil))
+        (result (gymnast-elaborate-declaration module-name child))
         (node (car result))
-        (new-diagnostics (cadr result)))
+        (child-diags (cadr result)))
       (gymnast-elaborate-children
-        module-name (cdr children)
+        module-name
+        (append (or extra-children nil) (cdr children))
         (if node (append nodes (list node)) nodes)
-        (append diagnostics new-diagnostics)))))
+        (append diagnostics child-diags (or profile-diags nil))))))
 
 (defun gymnast-duplicate-id-diagnostics (nodes seen)
   (if (null nodes)

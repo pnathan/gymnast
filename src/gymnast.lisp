@@ -2,10 +2,12 @@
 
 (include "core.lisp")
 (include "surface.lisp")
+(include "profile.lisp")
 (include "elaborate.lisp")
 (include "plan.lisp")
 (include "prompt.lisp")
 (include "candidate.lisp")
+(include "serialize.lisp")
 
 (defun gymnast-compile (surface)
   (let* ((ir (gymnast-elaborate surface))
