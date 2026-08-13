@@ -79,9 +79,26 @@
                             (car file-entry))
                           nil)))
                     files)))
+              nil))
+          (declared-caps
+            (gymnast-plan-node-field node 'capabilities))
+          (edge-uses
+            (or (gymnast-candidate-field candidate 'edge-uses) nil))
+          (bad-edges
+            (if (and edge-uses (not (equal declared-caps '((none)))))
+              (mapcar
+                (lambda (edge)
+                  (gymnast-diagnostic
+                    'error 'undeclared-edge-use node-id
+                    (concat "candidate uses capability edge not "
+                      "declared in node contract")
+                    edge))
+                (filter
+                  (lambda (edge) (not (member edge declared-caps)))
+                  edge-uses))
               nil)))
         (append wrong-node bad-paths missing-paths assumptions unresolved
-          target-violations)))))
+          target-violations bad-edges)))))
 
 (defun gymnast-candidate-valid-p (node candidate)
   (not (gymnast-has-errors-p

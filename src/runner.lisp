@@ -25,7 +25,12 @@
 
 ;;; Repair prompt generation.
 
-(defun gymnast-repair-prompt (prompt-package diagnostics attempt)
+(defun gymnast-truncate-string (s max-len)
+  (if (<= (length s) max-len) s
+    (concat (substring s 0 max-len) "... [truncated]")))
+
+(defun gymnast-repair-prompt (prompt-package diagnostics attempt
+    &optional rejected-response)
   (let* ((nl (code-char 10))
       (original-text
         (gymnast-assoc-value 'text (cdr prompt-package)))
@@ -35,14 +40,26 @@
                 (princ-to-string
                   (gymnast-diagnostic-field d 'code))
                 ": "
-                (gymnast-diagnostic-field d 'message)))
+                (gymnast-diagnostic-field d 'message)
+                (let ((details
+                      (gymnast-diagnostic-field d 'details)))
+                  (if details
+                    (concat " [" (princ-to-string details) "]")
+                    ""))))
             diagnostics)
           (code-char 10)))
+      (rejected-section
+        (if (and rejected-response (stringp rejected-response)
+            (> (length rejected-response) 0))
+          (concat nl "YOUR REJECTED OUTPUT:" nl
+            (gymnast-truncate-string rejected-response 2000) nl)
+          ""))
       (repair-text (concat
           original-text nl nl
           "REPAIR ATTEMPT " (princ-to-string attempt) nl
           "The previous candidate was rejected. Fix these issues:" nl
-          diag-text nl nl
+          diag-text
+          rejected-section nl nl
           "Return only the corrected candidate S-expression.")))
     (gymnast-put-assoc 'text repair-text (cdr prompt-package))))
 
@@ -105,7 +122,7 @@
         (gymnast-run-node-loop ir plan node
           (cons 'prompt-package
             (gymnast-repair-prompt
-              prompt-package diagnostics (+ attempt 1)))
+              prompt-package diagnostics (+ attempt 1) response))
           provider-fn (+ attempt 1) max-attempts new-attempts)))))
 
 (defun gymnast-run-node (ir plan node provider-fn max-attempts)
@@ -182,13 +199,20 @@
 
 (def $gymnast-claude-system-prompt
   (concat
-    "You are a synthesis engine. "
+    "You are a deterministic synthesis engine. "
     "Output only a single S-expression candidate value. "
     "No markdown fences, no explanation, no commentary. "
-    "File content strings in the FILES list MUST be written in the language "
-    "specified by the TARGET field (e.g. Ruby for (RUBY :FRAMEWORK RAILS), "
-    "not Lisp or pseudocode). The content is source code in the target language "
-    "embedded as a string value inside the S-expression envelope."))
+    "The prompt contains structured sections: CAPABILITY CONTRACTS define "
+    "what runtime APIs are available and their guarantees. STATE MODEL "
+    "defines aggregation, consistency, and durability requirements. "
+    "TYPE REFERENCE defines exact field types and constraints. "
+    "BEHAVIORAL REFERENCE defines preconditions, postconditions, and "
+    "failure modes that the implementation must satisfy. "
+    "OBLIGATIONS are non-negotiable requirements. "
+    "PROHIBITIONS are hard constraints on what the output must not do. "
+    "File content strings in FILES MUST be source code in the TARGET "
+    "language, never Lisp or pseudocode. The S-expression envelope wraps "
+    "metadata; each file string is real source code."))
 
 (defun gymnast-claude-subprocess-call (prompt-file model-flag)
   (shell (concat

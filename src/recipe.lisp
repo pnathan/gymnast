@@ -150,12 +150,6 @@
 (defun gymnast-ruby-type-declaration (ir-node)
   (gymnast-emit-type-declaration $gymnast-ruby-target ir-node))
 
-(defun gymnast-join-strings (strings sep)
-  (if (null strings) ""
-    (if (null (cdr strings)) (car strings)
-      (concat (car strings) sep
-        (gymnast-join-strings (cdr strings) sep)))))
-
 (defun gymnast-design-contracts-executor (ir-slice node)
   (let* ((nl (code-char 10))
       (types (filter (lambda (n)
