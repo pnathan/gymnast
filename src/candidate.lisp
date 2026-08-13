@@ -55,20 +55,20 @@
           (target-lang (gymnast-plan-node-field node 'target))
           (target-violations
             (if (and target-lang
-                  (or (and (consp target-lang)
-                        (equal (car target-lang) 'ruby))
-                    (equal target-lang 'ruby)))
+                (or (and (consp target-lang)
+                    (equal (car target-lang) 'ruby))
+                  (equal target-lang 'ruby)))
               (let ((files (or (gymnast-candidate-field candidate 'files) nil)))
                 (filter (lambda (d) d)
                   (mapcar
                     (lambda (file-entry)
                       (let ((content (cadr file-entry)))
                         (if (and (stringp content)
-                              (or (gymnast-string-contains content "(defun ")
-                                (gymnast-string-contains content "(define ")
-                                (gymnast-string-contains content "(defmodule ")
-                                (gymnast-string-contains content "(defn ")
-                                (gymnast-string-contains content "(lambda ")))
+                            (or (gymnast-string-contains content "(defun ")
+                              (gymnast-string-contains content "(define ")
+                              (gymnast-string-contains content "(defmodule ")
+                              (gymnast-string-contains content "(defn ")
+                              (gymnast-string-contains content "(lambda ")))
                           (gymnast-diagnostic
                             'error 'target-language-violation node-id
                             "file content appears to be Lisp, not Ruby as required by TARGET"
