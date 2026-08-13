@@ -56,11 +56,12 @@
       "TARGET" newline
       (prin1-to-string (gymnast-plan-node-field node 'target)) newline
       "IMPORTANT: All file content strings in the FILES list MUST be source code "
-      "written in the language specified by the TARGET above. "
-      "For example, if TARGET is (RUBY :FRAMEWORK RAILS), every file content "
-      "string must be valid Ruby code, not Lisp, Scheme, Clojure, or pseudocode. "
-      "The S-expression envelope wraps the candidate metadata; the file content "
-      "inside each string literal is real source code in the target language."
+      "written in the language specified by the TARGET above, not Lisp, Scheme, "
+      "Clojure, or pseudocode. The S-expression envelope wraps candidate metadata; "
+      "each file content string is real source code in the target language. "
+      "For TARGET (RUBY :FRAMEWORK RAILS), write Ruby. "
+      "For TARGET (GO :FRAMEWORK STDLIB), write Go. "
+      "For TARGET (JAVA :FRAMEWORK SPRING), write Java."
       newline newline
       "AUTHORIZED FILES" newline
       (prin1-to-string (gymnast-plan-node-field node 'may-write)) newline newline

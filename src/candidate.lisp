@@ -53,25 +53,29 @@
                   "candidate reported an unresolved contract"
                   (gymnast-candidate-field candidate 'unresolved)))))
           (target-lang (gymnast-plan-node-field node 'target))
+          (target-key (if (consp target-lang) (car target-lang) target-lang))
+          (non-lisp-target (and target-key
+              (not (equal target-key 'lamedh))
+              (not (equal target-key 'lisp))
+              (not (equal target-key 'scheme))))
           (target-violations
-            (if (and target-lang
-                (or (and (consp target-lang)
-                    (equal (car target-lang) 'ruby))
-                  (equal target-lang 'ruby)))
+            (if non-lisp-target
               (let ((files (or (gymnast-candidate-field candidate 'files) nil)))
                 (filter (lambda (d) d)
                   (mapcar
                     (lambda (file-entry)
                       (let ((content (cadr file-entry)))
                         (if (and (stringp content)
-                            (or (gymnast-string-contains content "(defun ")
-                              (gymnast-string-contains content "(define ")
-                              (gymnast-string-contains content "(defmodule ")
-                              (gymnast-string-contains content "(defn ")
-                              (gymnast-string-contains content "(lambda ")))
+                            (or (gymnast-string-contains content "(def")
+                              (gymnast-string-contains content "(lambda ")
+                              (gymnast-string-contains content "(module ")
+                              (gymnast-string-contains content "(setq ")
+                              (gymnast-string-contains content "(let ")))
                           (gymnast-diagnostic
                             'error 'target-language-violation node-id
-                            "file content appears to be Lisp, not Ruby as required by TARGET"
+                            (concat "file content appears to be Lisp, not "
+                              (gymnast-symbol-string target-key)
+                              " as required by TARGET")
                             (car file-entry))
                           nil)))
                     files)))
