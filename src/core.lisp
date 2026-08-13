@@ -37,6 +37,17 @@
 (defun gymnast-symbol-string (x)
   (string-downcase (princ-to-string x)))
 
+(defun gymnast-string-contains (haystack needle)
+  (let ((nlen (length needle)))
+    (if (< (length haystack) nlen) nil
+      (gymnast-string-contains-scan haystack needle nlen 0
+        (- (length haystack) nlen)))))
+
+(defun gymnast-string-contains-scan (haystack needle nlen idx limit)
+  (if (> idx limit) nil
+    (if (equal (substring haystack idx (+ idx nlen)) needle) t
+      (gymnast-string-contains-scan haystack needle nlen (+ idx 1) limit))))
+
 (defun gymnast-keyword-p (x)
   (and (symbolp x) (starts-with-p (princ-to-string x) ":")))
 

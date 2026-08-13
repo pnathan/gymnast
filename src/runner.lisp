@@ -184,7 +184,11 @@
   (concat
     "You are a synthesis engine. "
     "Output only a single S-expression candidate value. "
-    "No markdown fences, no explanation, no commentary."))
+    "No markdown fences, no explanation, no commentary. "
+    "File content strings in the FILES list MUST be written in the language "
+    "specified by the TARGET field (e.g. Ruby for (RUBY :FRAMEWORK RAILS), "
+    "not Lisp or pseudocode). The content is source code in the target language "
+    "embedded as a string value inside the S-expression envelope."))
 
 (defun gymnast-claude-subprocess-call (prompt-file model-flag)
   (shell (concat

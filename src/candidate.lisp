@@ -51,8 +51,33 @@
               (list (gymnast-diagnostic
                   'error 'candidate-unresolved node-id
                   "candidate reported an unresolved contract"
-                  (gymnast-candidate-field candidate 'unresolved))))))
-        (append wrong-node bad-paths missing-paths assumptions unresolved)))))
+                  (gymnast-candidate-field candidate 'unresolved)))))
+          (target-lang (gymnast-plan-node-field node 'target))
+          (target-violations
+            (if (and target-lang
+                  (or (and (consp target-lang)
+                        (equal (car target-lang) 'ruby))
+                    (equal target-lang 'ruby)))
+              (let ((files (or (gymnast-candidate-field candidate 'files) nil)))
+                (filter (lambda (d) d)
+                  (mapcar
+                    (lambda (file-entry)
+                      (let ((content (cadr file-entry)))
+                        (if (and (stringp content)
+                              (or (gymnast-string-contains content "(defun ")
+                                (gymnast-string-contains content "(define ")
+                                (gymnast-string-contains content "(defmodule ")
+                                (gymnast-string-contains content "(defn ")
+                                (gymnast-string-contains content "(lambda ")))
+                          (gymnast-diagnostic
+                            'error 'target-language-violation node-id
+                            "file content appears to be Lisp, not Ruby as required by TARGET"
+                            (car file-entry))
+                          nil)))
+                    files)))
+              nil)))
+        (append wrong-node bad-paths missing-paths assumptions unresolved
+          target-violations)))))
 
 (defun gymnast-candidate-valid-p (node candidate)
   (not (gymnast-has-errors-p
