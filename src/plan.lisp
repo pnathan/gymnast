@@ -25,6 +25,29 @@
       (cadr (gymnast-ir-field ir 'module)))
     "/plan/" local-name))
 
+(defun gymnast-target-file-extension (target)
+  (let ((lang (if (consp target) (car target) target)))
+    (cond
+      ((equal lang 'ruby) ".rb")
+      ((equal lang 'go) ".go")
+      ((equal lang 'java) ".java")
+      ((equal lang 'python) ".py")
+      ((equal lang 'typescript) ".ts")
+      ((equal lang 'javascript) ".js")
+      ((equal lang 'rust) ".rs")
+      (t ".lisp"))))
+
+(defun gymnast-rewrite-extension (path new-ext)
+  (let ((len (length path)))
+    (if (and (>= len 5)
+        (equal (substring path (- len 5) len) ".lisp"))
+      (concat (substring path 0 (- len 5)) new-ext)
+      path)))
+
+(defun gymnast-target-paths (paths target)
+  (let ((ext (gymnast-target-file-extension target)))
+    (mapcar (lambda (p) (gymnast-rewrite-extension p ext)) paths)))
+
 (defun gymnast-ids-for-kinds (ir kinds)
   (gymnast-ir-node-ids
     (filter (lambda (node) (member (gymnast-ir-node-kind node) kinds))
@@ -33,6 +56,7 @@
 (defun gymnast-build-plan-nodes (ir)
   (let* ((target (gymnast-selected-target ir))
       (model (gymnast-selected-model ir))
+      (tp (lambda (paths) (gymnast-target-paths paths target)))
       (design-id (gymnast-plan-id ir "design-contracts"))
       (transition-id (gymnast-plan-id ir "transition-kernel"))
       (auth-id (gymnast-plan-id ir "authorization-policy"))
@@ -46,7 +70,7 @@
           design-id 'structural 'design-contracts-v1
           (gymnast-ids-for-kinds ir '(actor type component flow))
           nil target '(none)
-          '("generated/design/contracts.lisp") nil
+          (funcall tp '("generated/design/contracts.lisp")) nil
           '(well-formed-types explicit-capability-edges)
           '(invent-product-semantics add-dependencies)))
       (transitions
@@ -54,7 +78,7 @@
           transition-id 'generative 'transition-kernel-v1
           (gymnast-ids-for-kinds ir '(type state behavior invariant))
           (list design-id) target model
-          '("generated/domain/transitions.lisp")
+          (funcall tp '("generated/domain/transitions.lisp"))
           '(clock id-source)
           '(implements-transition-system preserves-invariants
             deterministic-under-same-input)
@@ -64,7 +88,7 @@
           auth-id 'generative 'authorization-policy-v1
           (gymnast-ids-for-kinds ir '(actor flow behavior invariant))
           (list design-id transition-id) target model
-          '("generated/domain/authorization.lisp") nil
+          (funcall tp '("generated/domain/authorization.lisp")) nil
           '(deny-by-default noninterference owner-isolation)
           '(grant-undeclared-capabilities reveal-resource-existence)))
       (persistence
@@ -72,8 +96,8 @@
           persistence-id 'generative 'persistence-v1
           (gymnast-ids-for-kinds ir '(type state behavior constraint))
           (list design-id transition-id) target model
-          '("generated/adapters/persistence.lisp"
-            "generated/adapters/schema.sexpr")
+          (funcall tp '("generated/adapters/persistence.lisp"
+              "generated/adapters/schema.sexpr"))
           '(durable-store transactions)
           '(durable-commit atomic-boundaries retry-safety)
           '(perform-network-io choose-unpinned-dependencies)))
@@ -82,7 +106,7 @@
           interface-id 'structural 'interface-contracts-v1
           (gymnast-ids-for-kinds ir '(type interface))
           (list design-id) target '(none)
-          '("generated/interfaces/contracts.lisp") nil
+          (funcall tp '("generated/interfaces/contracts.lisp")) nil
           '(complete-operation-surface declared-errors-only)
           '(change-observable-contract)))
       (handlers
@@ -91,7 +115,7 @@
           (gymnast-ids-for-kinds ir '(interface behavior state constraint))
           (list transition-id auth-id persistence-id interface-id)
           target model
-          '("generated/service/handlers.lisp")
+          (funcall tp '("generated/service/handlers.lisp"))
           '(repository identity clock id-source)
           '(contract-conformance authorization-before-observation
             idempotent-retries)
@@ -102,7 +126,7 @@
           (gymnast-ids-for-kinds
             ir '(behavior invariant constraint acceptance interface state))
           (list handler-id) target '(none)
-          '("generated/verification/acceptance.lisp") nil
+          (funcall tp '("generated/verification/acceptance.lisp")) nil
           '(independent-oracle trace-equivalence boundary-coverage
             deterministic-execution)
           '(read-generated-rationale weaken-obligations skip-failures)))
@@ -114,7 +138,8 @@
           (list transition-id auth-id persistence-id interface-id
             handler-id acceptance-id)
           target '(none)
-          '("generated/application.lisp" "generated/manifest.sexpr") nil
+          (funcall tp '("generated/application.lisp"
+              "generated/manifest.sexpr")) nil
           '(all-artifacts-linked all-obligations-addressed)
           '(untracked-artifacts undeclared-capabilities))))
     (list design transitions authorization persistence interfaces handlers

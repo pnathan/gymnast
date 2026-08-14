@@ -36,17 +36,28 @@
       "Apply the named deterministic compiler recipe exactly.")
     (t "Assemble only the declared artifacts and capability edges.")))
 
+(defun gymnast-target-content-hint (target)
+  (let ((lang (if (consp target) (car target) target)))
+    (cond
+      ((equal lang 'ruby) "<valid Ruby source code>")
+      ((equal lang 'go) "<valid Go source code>")
+      ((equal lang 'java) "<valid Java source code>")
+      ((equal lang 'python) "<valid Python source code>")
+      (t "<complete-content>"))))
+
 (defun gymnast-output-protocol (node)
-  (list 'candidate
-    (list 'schema $gymnast-candidate-schema)
-    (list 'node-id (gymnast-plan-node-id node))
-    (list 'files
-      (mapcar (lambda (path) (list path "<complete-content>"))
-        (gymnast-plan-node-field node 'may-write)))
-    (list 'implements "<ir-node-id-list>")
-    (list 'edge-uses "<declared-capability-edge-list>")
-    (list 'assumptions nil)
-    (list 'unresolved nil)))
+  (let ((hint (gymnast-target-content-hint
+          (gymnast-plan-node-field node 'target))))
+    (list 'candidate
+      (list 'schema $gymnast-candidate-schema)
+      (list 'node-id (gymnast-plan-node-id node))
+      (list 'files
+        (mapcar (lambda (path) (list path hint))
+          (gymnast-plan-node-field node 'may-write)))
+      (list 'implements "<ir-node-id-list>")
+      (list 'edge-uses nil)
+      (list 'assumptions nil)
+      (list 'unresolved nil))))
 
 ;;; Structured projection: capability contracts from platform kit.
 
@@ -282,16 +293,52 @@
     (gymnast-symbol-string (car target))
     (if target (gymnast-symbol-string target) "unknown")))
 
+(defun gymnast-target-framework-hint (target)
+  (if (not (consp target)) ""
+    (let ((lang (car target))
+        (framework (gymnast-keyword-value (cdr target) ':framework)))
+      (if (not framework) ""
+        (let ((nl (code-char 10)))
+          (cond
+            ((and (equal lang 'ruby) (equal framework 'rails))
+              (concat nl
+                "Use Rails conventions: ActiveRecord models, "
+                "ApplicationRecord base class, "
+                "standard Rails error handling."))
+            ((and (equal lang 'go) (equal framework 'stdlib))
+              (concat nl
+                "Use Go stdlib conventions: exported types with "
+                "receiver methods, error returns, "
+                "context.Context parameters."))
+            ((and (equal lang 'java) (equal framework 'spring))
+              (concat nl
+                "Use Spring conventions: @Repository/@Service "
+                "annotations, JPA entities, "
+                "@Transactional methods."))
+            ((and (equal lang 'python) (equal framework 'django))
+              (concat nl
+                "Use Django conventions: models.Model subclasses, "
+                "Manager/QuerySet patterns, "
+                "transaction.atomic blocks."))
+            (t (concat nl "Use "
+                (gymnast-symbol-string framework)
+                " conventions."))))))))
+
 (defun gymnast-target-section (node)
   (let* ((nl (code-char 10))
       (target (gymnast-plan-node-field node 'target))
-      (lang (gymnast-target-language-name target)))
+      (lang (gymnast-target-language-name target))
+      (ext (gymnast-target-file-extension target))
+      (paths (gymnast-plan-node-field node 'may-write)))
     (concat "TARGET" nl
-      (prin1-to-string target) nl
-      "File content strings in FILES must be " lang
-      " source code, not Lisp/Scheme/pseudocode. "
-      "The S-expression envelope wraps candidate metadata; "
-      "each file content string is real " lang " source code."
+      (prin1-to-string target) nl nl
+      "CRITICAL: Every file content string in FILES must be valid "
+      lang " source code." nl
+      "The output files end in " ext " — their content is " lang
+      ", never Lisp/Scheme/Clojure/pseudocode." nl
+      "The S-expression envelope (candidate ...) is metadata framing; "
+      "file content strings inside it are real " lang " source code."
+      (gymnast-target-framework-hint target)
       nl nl)))
 
 ;;; Prompt text assembly.
