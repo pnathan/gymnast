@@ -32,13 +32,6 @@
 ;;; for mandatory decisions.  Arguments arrive as a flat plist from
 ;;; the use-profile macro expansion.
 
-(defun gymnast-keyword-value (plist key)
-  (cond
-    ((null plist) nil)
-    ((null (cdr plist)) nil)
-    ((equal (car plist) key) (cadr plist))
-    (t (gymnast-keyword-value (cdr (cdr plist)) key))))
-
 (defun gymnast-plist-to-alist (plist)
   (if (or (null plist) (null (cdr plist)))
     nil
