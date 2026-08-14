@@ -64,6 +64,9 @@
     ((equal (car plist) key) (cadr plist))
     (t (gymnast-keyword-value (cdr (cdr plist)) key))))
 
+(defun gymnast-target-language (target)
+  (if (consp target) (car target) target))
+
 (defun gymnast-tagged-p (tag x)
   (and (consp x) (equal (car x) tag)))
 

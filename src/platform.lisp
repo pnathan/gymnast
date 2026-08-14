@@ -26,14 +26,14 @@
           (list 'version version)
           (list 'target target)
           (list 'capabilities capabilities)))
-      (lang (if (consp target) (car target) target)))
+      (lang (gymnast-target-language target)))
     (putp name (gymnast-platform-prop-key version) kit)
+    ;; Last kit registered for a target language wins.
     (putp lang "gymnast.platform/by-target" capabilities)
     kit))
 
 (defun gymnast-platform-capabilities-for-target (target)
-  (let ((lang (if (consp target) (car target) target)))
-    (getp lang "gymnast.platform/by-target")))
+  (getp (gymnast-target-language target) "gymnast.platform/by-target"))
 
 (defun gymnast-lookup-platform-kit (name version)
   (if version

@@ -37,7 +37,7 @@
     (t "Assemble only the declared artifacts and capability edges.")))
 
 (defun gymnast-target-content-hint (target)
-  (let ((lang (if (consp target) (car target) target)))
+  (let ((lang (gymnast-target-language target)))
     (cond
       ((equal lang 'ruby) "<valid Ruby source code>")
       ((equal lang 'go) "<valid Go source code>")
