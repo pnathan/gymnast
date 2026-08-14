@@ -41,26 +41,25 @@
     (equal (gymnast-env-field env 'network) 'controlled)))
 
 (defun gymnast-env-diagnostics (env acceptance-id)
-  (let ((warnings nil))
-    (append
-      (if (not (equal (gymnast-env-field env 'clock) 'virtual))
-        (list (gymnast-diagnostic 'warning 'non-deterministic-clock
-            acceptance-id
-            "clock is not virtual; traces may not reproduce"
-            (gymnast-env-field env 'clock)))
-        nil)
-      (if (not (equal (gymnast-env-field env 'randomness) 'seeded))
-        (list (gymnast-diagnostic 'warning 'non-deterministic-randomness
-            acceptance-id
-            "randomness is not seeded; traces may not reproduce"
-            (gymnast-env-field env 'randomness)))
-        nil)
-      (if (not (equal (gymnast-env-field env 'network) 'controlled))
-        (list (gymnast-diagnostic 'warning 'non-deterministic-network
-            acceptance-id
-            "network is not controlled; traces may not reproduce"
-            (gymnast-env-field env 'network)))
-        nil))))
+  (append
+    (if (not (equal (gymnast-env-field env 'clock) 'virtual))
+      (list (gymnast-diagnostic 'warning 'non-deterministic-clock
+          acceptance-id
+          "clock is not virtual; traces may not reproduce"
+          (gymnast-env-field env 'clock)))
+      nil)
+    (if (not (equal (gymnast-env-field env 'randomness) 'seeded))
+      (list (gymnast-diagnostic 'warning 'non-deterministic-randomness
+          acceptance-id
+          "randomness is not seeded; traces may not reproduce"
+          (gymnast-env-field env 'randomness)))
+      nil)
+    (if (not (equal (gymnast-env-field env 'network) 'controlled))
+      (list (gymnast-diagnostic 'warning 'non-deterministic-network
+          acceptance-id
+          "network is not controlled; traces may not reproduce"
+          (gymnast-env-field env 'network)))
+      nil)))
 
 ;;; Obligation lowering: each acceptance clause becomes one obligation.
 

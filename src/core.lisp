@@ -70,12 +70,6 @@
       (string-lessp (gymnast-symbol-string (car a))
         (gymnast-symbol-string (car b))))))
 
-(defun gymnast-canonical-data (x)
-  (cond
-    ((null x) nil)
-    ((atom x) x)
-    (t (mapcar #'gymnast-canonical-data x))))
-
 ;;; FNV-1a fingerprinting.
 
 (defun gymnast-fnv1a-step (hash chars)
