@@ -26,7 +26,7 @@
     "/plan/" local-name))
 
 (defun gymnast-target-file-extension (target)
-  (let ((lang (if (consp target) (car target) target)))
+  (let ((lang (gymnast-target-language target)))
     (cond
       ((equal lang 'ruby) ".rb")
       ((equal lang 'go) ".go")

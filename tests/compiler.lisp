@@ -424,6 +424,36 @@
           plan $gymnast-ruby-platform-kit)))
     (assert-equal (length diagnostics) 0)))
 
+(deftest platform-capabilities-lookup-by-target
+  (let ((caps (gymnast-platform-capabilities-for-target 'ruby)))
+    (assert-true caps)
+    (assert-true (> (length caps) 0))
+    (assert-true
+      (gymnast-any
+        (lambda (c) (equal (gymnast-capability-field c 'name) 'identity))
+        caps))))
+
+(deftest platform-capabilities-lookup-cons-target
+  (let ((caps (gymnast-platform-capabilities-for-target
+          '(ruby :framework rails))))
+    (assert-true caps)
+    (assert-true (> (length caps) 0))))
+
+(deftest platform-capabilities-missing-target-returns-nil
+  (assert-false (gymnast-platform-capabilities-for-target 'haskell)))
+
+(deftest prompt-text-includes-capability-contracts
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (nodes (gymnast-plan-field plan 'nodes))
+      (generative (car (filter
+            (lambda (n)
+              (equal (gymnast-plan-node-field n 'class) 'generative))
+            nodes)))
+      (prompt (gymnast-compile-prompt ir plan generative))
+      (text (gymnast-assoc-value 'text (cdr prompt))))
+    (assert-true (gymnast-string-contains text "CAPABILITY CONTRACTS"))))
+
 ;;; Recipe registry and executor tests.
 
 (deftest recipe-registry-has-all-plan-recipes

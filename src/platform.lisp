@@ -25,9 +25,15 @@
           (list 'name name)
           (list 'version version)
           (list 'target target)
-          (list 'capabilities capabilities))))
+          (list 'capabilities capabilities)))
+      (lang (gymnast-target-language target)))
     (putp name (gymnast-platform-prop-key version) kit)
+    ;; Last kit registered for a target language wins.
+    (putp lang "gymnast.platform/by-target" capabilities)
     kit))
+
+(defun gymnast-platform-capabilities-for-target (target)
+  (getp (gymnast-target-language target) "gymnast.platform/by-target"))
 
 (defun gymnast-lookup-platform-kit (name version)
   (if version
