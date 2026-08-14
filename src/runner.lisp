@@ -212,7 +212,13 @@
     "PROHIBITIONS are hard constraints on what the output must not do. "
     "File content strings in FILES MUST be source code in the TARGET "
     "language, never Lisp or pseudocode. The S-expression envelope wraps "
-    "metadata; each file string is real source code."))
+    "metadata; each file string is real source code. "
+    "ESCAPING: file content is inside S-expression double-quoted strings. "
+    "Every literal double-quote inside file content MUST be backslash-escaped "
+    "and every literal backslash MUST also be backslash-escaped. Unescaped "
+    "quotes break the parser and cause rejection. Use single-quoted strings "
+    "in the target language where the language permits it. "
+    "ASSUMPTIONS and UNRESOLVED must both be NIL."))
 
 (defun gymnast-claude-subprocess-call (prompt-file model-flag)
   (shell (concat

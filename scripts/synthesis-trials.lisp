@@ -52,8 +52,8 @@
 
 (defun count-by-status (trials status)
   (length (filter
-      (lambda (t)
-        (equal (gymnast-assoc-value 'status (cdr t)) status))
+      (lambda (tr)
+        (equal (gymnast-assoc-value 'status (cdr tr)) status))
       trials)))
 
 (defun sum-attempts (trials)
@@ -68,11 +68,11 @@
       (succeeded (count-by-status trials 'succeeded))
       (exhausted (count-by-status trials 'exhausted))
       (first-attempt (length (filter
-            (lambda (t)
+            (lambda (tr)
               (and
-                (equal (gymnast-assoc-value 'status (cdr t))
+                (equal (gymnast-assoc-value 'status (cdr tr))
                   'succeeded)
-                (= (gymnast-assoc-value 'attempt-count (cdr t))
+                (= (gymnast-assoc-value 'attempt-count (cdr tr))
                   1)))
             trials)))
       (total-attempts (sum-attempts trials)))
@@ -86,8 +86,8 @@
         (princ-to-string
           (if (> succeeded 0)
             (let* ((success-trials (filter
-                    (lambda (t)
-                      (equal (gymnast-assoc-value 'status (cdr t))
+                    (lambda (tr)
+                      (equal (gymnast-assoc-value 'status (cdr tr))
                         'succeeded))
                     trials))
                 (success-attempts (sum-attempts success-trials)))

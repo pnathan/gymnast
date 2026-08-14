@@ -337,7 +337,11 @@
       "The output files end in " ext " — their content is " lang
       ", never Lisp/Scheme/Clojure/pseudocode." nl
       "The S-expression envelope (candidate ...) is metadata framing; "
-      "file content strings inside it are real " lang " source code."
+      "file content strings inside it are real " lang " source code." nl
+      "ESCAPING: file content is inside S-expression double-quoted strings. "
+      "Backslash-escape every literal double-quote and every literal "
+      "backslash in file content. Prefer single-quoted strings in "
+      lang " where the language allows it."
       (gymnast-target-framework-hint target)
       nl nl)))
 

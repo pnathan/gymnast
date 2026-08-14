@@ -5,11 +5,11 @@
     (plan (gymnast-plan ir))
     (prompts (gymnast-compile-prompts ir plan))
     (persistence (car (filter
-        (lambda (p)
-          (gymnast-string-contains
-            (gymnast-assoc-value 'node-id (cdr p))
-            "persistence"))
-        prompts)))
+          (lambda (p)
+            (gymnast-string-contains
+              (gymnast-assoc-value 'node-id (cdr p))
+              "persistence"))
+          prompts)))
     (text (gymnast-assoc-value 'text (cdr persistence))))
   (princ text)
   (terpri))
