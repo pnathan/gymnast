@@ -43,6 +43,7 @@
       ((equal lang 'go) "<valid Go source code>")
       ((equal lang 'java) "<valid Java source code>")
       ((equal lang 'python) "<valid Python source code>")
+      ((equal lang 'rust) "<valid Rust source code>")
       (t "<complete-content>"))))
 
 (defun gymnast-output-protocol (node)
@@ -326,6 +327,11 @@
                 "docstrings — use triple-single-quoted ('''...''') for "
                 "docstrings instead. This is mandatory because the code "
                 "is inside an S-expression double-quoted string."))
+            ((and (equal lang 'rust) (equal framework 'actix))
+              (concat nl
+                "Use Actix-web conventions: extractors, "
+                "App::new().service() routing, "
+                "impl Handler patterns, Result<HttpResponse>."))
             (t (concat nl "Use "
                 (gymnast-symbol-string framework)
                 " conventions."))))))))
