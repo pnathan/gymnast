@@ -487,22 +487,45 @@
           nil)
         (gymnast-make-verification-result ob-id 'passed trace nil nil)))))
 
-;;; Verify invariant obligations by checking against all transitions.
+;;; Verify invariant obligations by checking against initial state
+;;; and all post-transition states reachable in one step.
+
+(defun gymnast-find-invariant-post-violation (predicate transitions
+    state ob-id)
+  (if (null transitions) nil
+    (let* ((tr (car transitions))
+        (step (gymnast-apply-transition tr state nil nil))
+        (post (gymnast-trace-step-post-state step))
+        (holds (gymnast-eval-predicate predicate post nil nil)))
+      (if holds
+        (gymnast-find-invariant-post-violation predicate
+          (cdr transitions) state ob-id)
+        (list 'normalized-counterexample
+          (list 'obligation-id ob-id)
+          (list 'divergence-type 'invariant-violation-post-transition)
+          (list 'predicate predicate)
+          (list 'state post)
+          (list 'transition (gymnast-transition-field tr 'id)))))))
 
 (defun gymnast-verify-invariant-obligation (ir obligation)
   (let* ((ob-id (gymnast-obligation-field obligation 'id))
       (predicate (gymnast-obligation-field obligation 'predicate))
       (state (gymnast-make-initial-state ir))
-      (holds (gymnast-eval-predicate predicate state nil nil)))
-    (if holds
-      (gymnast-make-verification-result ob-id 'passed nil nil nil)
+      (holds-initial (gymnast-eval-predicate predicate state nil nil)))
+    (if (not holds-initial)
       (gymnast-make-verification-result ob-id 'failed nil
         (list (list 'normalized-counterexample
             (list 'obligation-id ob-id)
             (list 'divergence-type 'invariant-violation)
             (list 'predicate predicate)
             (list 'state state)))
-        nil))))
+        nil)
+      (let ((violation (gymnast-find-invariant-post-violation predicate
+              (gymnast-extract-transitions ir) state ob-id)))
+        (if violation
+          (gymnast-make-verification-result ob-id 'failed nil
+            (list violation) nil)
+          (gymnast-make-verification-result ob-id 'passed nil nil nil))))))
 
 ;;; Top-level: verify all obligations against the reference system.
 
