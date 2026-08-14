@@ -57,6 +57,13 @@
 (defun gymnast-keyword-p (x)
   (and (symbolp x) (starts-with-p (princ-to-string x) ":")))
 
+(defun gymnast-keyword-value (plist key)
+  (cond
+    ((null plist) nil)
+    ((null (cdr plist)) nil)
+    ((equal (car plist) key) (cadr plist))
+    (t (gymnast-keyword-value (cdr (cdr plist)) key))))
+
 (defun gymnast-tagged-p (tag x)
   (and (consp x) (equal (car x) tag)))
 
