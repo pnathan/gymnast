@@ -244,7 +244,7 @@
         (exit-code (car result))
         (stdout (cadr result))
         (stderr (caddr result)))
-      (delete-file prompt-file)
+      (ignore-errors (delete-file prompt-file))
       (if (= exit-code 0)
         stdout
         nil))))

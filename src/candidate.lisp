@@ -66,11 +66,14 @@
                     (lambda (file-entry)
                       (let ((content (cadr file-entry)))
                         (if (and (stringp content)
-                            (or (gymnast-string-contains content "(def")
+                            (or (gymnast-string-contains content "(defun ")
+                              (gymnast-string-contains content "(defvar ")
+                              (gymnast-string-contains content "(defmacro ")
+                              (gymnast-string-contains content "(define ")
                               (gymnast-string-contains content "(lambda ")
                               (gymnast-string-contains content "(module ")
                               (gymnast-string-contains content "(setq ")
-                              (gymnast-string-contains content "(let ")))
+                              (gymnast-string-contains content "(let* ")))
                           (gymnast-diagnostic
                             'error 'target-language-violation node-id
                             (concat "file content appears to be Lisp, not "
