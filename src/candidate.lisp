@@ -82,8 +82,11 @@
               nil))
           (declared-caps
             (gymnast-plan-node-field node 'capabilities))
-          (edge-uses
+          (edge-uses-raw
             (or (gymnast-candidate-field candidate 'edge-uses) nil))
+          (edge-uses
+            (if (and edge-uses-raw (listp edge-uses-raw))
+              edge-uses-raw nil))
           (bad-edges
             (if (and edge-uses (not (equal declared-caps '((none)))))
               (mapcar
