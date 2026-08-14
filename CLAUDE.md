@@ -83,7 +83,12 @@ examples/
   todo-go.lisp       Todo app targeting Go/stdlib
   todo-java.lisp     Todo app targeting Java/Spring
   todo-python.lisp   Todo app targeting Python/Django
-  twitter.lisp       Twitter clone: distributed systems design problem
+  todo-rust.lisp     Todo app targeting Rust/Actix
+  twitter.lisp       Twitter clone (Ruby/Rails target)
+  twitter-go.lisp    Twitter clone targeting Go/stdlib
+  twitter-java.lisp  Twitter clone targeting Java/Spring
+  twitter-python.lisp Twitter clone targeting Python/Django
+  twitter-rust.lisp  Twitter clone targeting Rust/Actix
 platform/
   ruby/              Ruby platform kit: adapters, test doubles, model provider
 scripts/
@@ -180,7 +185,7 @@ Issues #1–#10 are closed. Issues #12, #17, #23 remain open.
 ## What is built
 
 The complete compiler pipeline from surface through assembly, with 178 tests
-across 7 test files and 5 example specifications:
+across 7 test files and 10 example specifications:
 
 - Surface capture and profile resolution
 - Closed-world elaboration with semantic IDs and fingerprinting
@@ -197,7 +202,7 @@ across 7 test files and 5 example specifications:
 - Assembly and promotion evidence bundles
 - Adequacy campaign framework (mutation, concurrency, fault injection)
 - Canonical serialization with trust-boundary validation
-- Multi-target examples (Ruby, Go, Java, Python) and a Twitter clone spec
+- Multi-target examples (Ruby, Go, Java, Python, Rust) for both Todo and Twitter specs
 - CI: format check, test suite, Todo elaboration, reproducible compilation
 
 ## What is not built
