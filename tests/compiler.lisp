@@ -1110,3 +1110,42 @@
     (if (> survived 0)
       (assert-true (gymnast-campaign-result-field result 'blind-spots))
       (assert-equal survived 0))))
+
+;;; Multi-target benchmark: all specs elaborate and plan to 8-node DAGs.
+
+(load-file "examples/todo-rust.lisp")
+(load-file "examples/twitter.lisp")
+(load-file "examples/twitter-go.lisp")
+(load-file "examples/twitter-java.lisp")
+(load-file "examples/twitter-python.lisp")
+(load-file "examples/twitter-rust.lisp")
+
+(deftest todo-rust-elaborates-and-plans
+  (let* ((ir (gymnast-elaborate todo-rust-spec))
+      (plan (gymnast-plan ir)))
+    (assert-equal (length (gymnast-plan-field plan 'nodes)) 8)))
+
+(deftest twitter-ruby-elaborates-and-plans
+  (let* ((ir (gymnast-elaborate twitter-spec))
+      (plan (gymnast-plan ir)))
+    (assert-equal (length (gymnast-plan-field plan 'nodes)) 8)))
+
+(deftest twitter-go-elaborates-and-plans
+  (let* ((ir (gymnast-elaborate twitter-go-spec))
+      (plan (gymnast-plan ir)))
+    (assert-equal (length (gymnast-plan-field plan 'nodes)) 8)))
+
+(deftest twitter-java-elaborates-and-plans
+  (let* ((ir (gymnast-elaborate twitter-java-spec))
+      (plan (gymnast-plan ir)))
+    (assert-equal (length (gymnast-plan-field plan 'nodes)) 8)))
+
+(deftest twitter-python-elaborates-and-plans
+  (let* ((ir (gymnast-elaborate twitter-python-spec))
+      (plan (gymnast-plan ir)))
+    (assert-equal (length (gymnast-plan-field plan 'nodes)) 8)))
+
+(deftest twitter-rust-elaborates-and-plans
+  (let* ((ir (gymnast-elaborate twitter-rust-spec))
+      (plan (gymnast-plan ir)))
+    (assert-equal (length (gymnast-plan-field plan 'nodes)) 8)))

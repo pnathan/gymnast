@@ -45,6 +45,9 @@ bin/gymnast compile examples/todo.lisp todo-spec build/todo
 bin/gymnast compile examples/todo.lisp todo-spec build/one
 bin/gymnast compile examples/todo.lisp todo-spec build/two
 diff -ru build/one build/two
+
+# Synthesis benchmark (requires ANTHROPIC_API_KEY)
+scripts/benchmark.sh
 ```
 
 ## File layout
@@ -70,7 +73,7 @@ src/
   serialize.lisp     canonical serialization contract and trust-boundary validation
   cli.lisp           CLI entrypoint: check, ir, plan, prompts, compile subcommands
 tests/
-  compiler.lisp      97 tests: front-half pipeline, platform, transitions, verification
+  compiler.lisp      103 tests: front-half pipeline, platform, transitions, verification, multi-target
   core-types.lisp    48 tests: core data constructors and helpers
   transition-types.lisp  4 tests: transition record types
   recipe-types.lisp  4 tests: recipe record types
@@ -92,6 +95,8 @@ examples/
 platform/
   ruby/              Ruby platform kit: adapters, test doubles, model provider
 scripts/
+  benchmark.sh                 integration benchmark: 5 langs × 2 specs × 3 trials
+  run-benchmark-target.lisp    per-target benchmark runner (called by benchmark.sh)
   bootstrap-lamedh.sh         install pinned Lamedh binary
   synthesis-trials.lisp        multi-language synthesis benchmark
   synthesize-enriched.lisp     enriched synthesis runner
