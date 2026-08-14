@@ -25,9 +25,15 @@
           (list 'name name)
           (list 'version version)
           (list 'target target)
-          (list 'capabilities capabilities))))
+          (list 'capabilities capabilities)))
+      (lang (if (consp target) (car target) target)))
     (putp name (gymnast-platform-prop-key version) kit)
+    (putp lang "gymnast.platform/by-target" capabilities)
     kit))
+
+(defun gymnast-platform-capabilities-for-target (target)
+  (let ((lang (if (consp target) (car target) target)))
+    (getp lang "gymnast.platform/by-target")))
 
 (defun gymnast-lookup-platform-kit (name version)
   (if version

@@ -424,6 +424,24 @@
           plan $gymnast-ruby-platform-kit)))
     (assert-equal (length diagnostics) 0)))
 
+(deftest platform-capabilities-lookup-by-target
+  (let ((caps (gymnast-platform-capabilities-for-target 'ruby)))
+    (assert-true caps)
+    (assert-true (> (length caps) 0))
+    (assert-true
+      (gymnast-any
+        (lambda (c) (equal (gymnast-capability-field c 'name) 'identity))
+        caps))))
+
+(deftest platform-capabilities-lookup-cons-target
+  (let ((caps (gymnast-platform-capabilities-for-target
+          '(ruby :framework rails))))
+    (assert-true caps)
+    (assert-true (> (length caps) 0))))
+
+(deftest platform-capabilities-missing-target-returns-nil
+  (assert-false (gymnast-platform-capabilities-for-target 'haskell)))
+
 ;;; Recipe registry and executor tests.
 
 (deftest recipe-registry-has-all-plan-recipes

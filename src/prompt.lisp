@@ -88,8 +88,8 @@
 (defun gymnast-project-capability-contracts (node)
   (let* ((nl (code-char 10))
       (caps (gymnast-plan-node-field node 'capabilities))
-      (kit-caps (if (boundp '$gymnast-ruby-platform-capabilities)
-          $gymnast-ruby-platform-capabilities nil)))
+      (target (gymnast-plan-node-field node 'target))
+      (kit-caps (gymnast-platform-capabilities-for-target target)))
     (if (or (null caps) (equal caps '((none))))
       ""
       (concat "CAPABILITY CONTRACTS" nl
