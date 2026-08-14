@@ -694,6 +694,27 @@
       (assert-equal
         (gymnast-verification-result-field result 'status) 'passed))))
 
+(deftest invariant-checks-post-transition-states
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (inv-ob (list 'verification-obligation
+          (list 'id "test/invariant/empty-items/invariant-check")
+          (list 'kind 'invariant)
+          (list 'source "test/invariant/empty-items")
+          (list 'name 'empty-items)
+          (list 'scope 'items)
+          (list 'predicate '(not (= items (nil))))
+          (list 'environment nil)))
+      (result (gymnast-verify-invariant-obligation ir inv-ob)))
+    (assert-equal
+      (gymnast-verification-result-field result 'status) 'failed)
+    (let* ((cxs (gymnast-verification-result-field
+            result 'counterexamples))
+        (cx (car cxs)))
+      (assert-true cx)
+      (assert-equal
+        (gymnast-assoc-value 'divergence-type (cdr cx))
+        'invariant-violation-post-transition))))
+
 (deftest verification-bundle-compiles
   (let* ((ir (gymnast-elaborate gymnast-test-spec))
       (bundle (gymnast-compile-verification ir)))
