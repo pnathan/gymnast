@@ -319,7 +319,13 @@
               (concat nl
                 "Use Django conventions: models.Model subclasses, "
                 "Manager/QuerySet patterns, "
-                "transaction.atomic blocks."))
+                "transaction.atomic blocks." nl
+                "PYTHON STRING REQUIREMENT: use ONLY single-quoted "
+                "strings ('...') everywhere in the Python code. "
+                "Never use double-quoted strings or triple-double-quoted "
+                "docstrings — use triple-single-quoted ('''...''') for "
+                "docstrings instead. This is mandatory because the code "
+                "is inside an S-expression double-quoted string."))
             (t (concat nl "Use "
                 (gymnast-symbol-string framework)
                 " conventions."))))))))
