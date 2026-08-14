@@ -1,7 +1,7 @@
 ;;; A vertical-slice application specification.  This is intentionally more
 ;;; explicit than the eventual product surface; the kernel is under review.
 
-(defspec todo-spec
+(defspec todo-java-spec
   :version "0.1"
   :owner product
   :exports (UserId ListId TaskId TodoList Task todo-service)
@@ -133,7 +133,7 @@
       (= invariant-violations 0)))
 
   (synthesis prototype
-    :target (ruby :framework rails)
+    :target (java :framework spring)
     :platform gymnast-reference-platform-v1
     :model (small-code-model
       :class nano

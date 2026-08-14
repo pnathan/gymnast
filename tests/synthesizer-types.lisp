@@ -52,7 +52,7 @@
 
 (deftest system-prompt-instructs-sexpr-output
   (assert-true
-    (starts-with-p $gymnast-claude-system-prompt "You are a synthesis")))
+    (starts-with-p $gymnast-claude-system-prompt "You are a deterministic synthesis")))
 
 ;;; Provider function integration (no protocol dispatch in tests to
 ;;; avoid defprotocol re-entry clearing the dispatch table).

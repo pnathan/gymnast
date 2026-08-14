@@ -51,8 +51,60 @@
               (list (gymnast-diagnostic
                   'error 'candidate-unresolved node-id
                   "candidate reported an unresolved contract"
-                  (gymnast-candidate-field candidate 'unresolved))))))
-        (append wrong-node bad-paths missing-paths assumptions unresolved)))))
+                  (gymnast-candidate-field candidate 'unresolved)))))
+          (target-lang (gymnast-plan-node-field node 'target))
+          (target-key (if (consp target-lang) (car target-lang) target-lang))
+          (non-lisp-target (and target-key
+              (not (equal target-key 'lamedh))
+              (not (equal target-key 'lisp))
+              (not (equal target-key 'scheme))))
+          (target-violations
+            (if non-lisp-target
+              (let ((files (or (gymnast-candidate-field candidate 'files) nil)))
+                (filter (lambda (d) d)
+                  (mapcar
+                    (lambda (file-entry)
+                      (let ((content (cadr file-entry)))
+                        (if (and (stringp content)
+                            (or (gymnast-string-contains content "(defun ")
+                              (gymnast-string-contains content "(defvar ")
+                              (gymnast-string-contains content "(defmacro ")
+                              (gymnast-string-contains content "(define ")
+                              (gymnast-string-contains content "(lambda ")
+                              (gymnast-string-contains content "(module ")
+                              (gymnast-string-contains content "(setq ")
+                              (gymnast-string-contains content "(let* ")))
+                          (gymnast-diagnostic
+                            'error 'target-language-violation node-id
+                            (concat "file content appears to be Lisp, not "
+                              (gymnast-symbol-string target-key)
+                              " as required by TARGET")
+                            (car file-entry))
+                          nil)))
+                    files)))
+              nil))
+          (declared-caps
+            (gymnast-plan-node-field node 'capabilities))
+          (edge-uses-raw
+            (or (gymnast-candidate-field candidate 'edge-uses) nil))
+          (edge-uses
+            (if (and edge-uses-raw (listp edge-uses-raw))
+              edge-uses-raw nil))
+          (bad-edges
+            (if (and edge-uses (not (equal declared-caps '((none)))))
+              (mapcar
+                (lambda (edge)
+                  (gymnast-diagnostic
+                    'error 'undeclared-edge-use node-id
+                    (concat "candidate uses capability edge not "
+                      "declared in node contract")
+                    edge))
+                (filter
+                  (lambda (edge) (not (member edge declared-caps)))
+                  edge-uses))
+              nil)))
+        (append wrong-node bad-paths missing-paths assumptions unresolved
+          target-violations bad-edges)))))
 
 (defun gymnast-candidate-valid-p (node candidate)
   (not (gymnast-has-errors-p
