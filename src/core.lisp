@@ -64,8 +64,25 @@
     ((equal (car plist) key) (cadr plist))
     (t (gymnast-keyword-value (cdr (cdr plist)) key))))
 
+(defun gymnast-plist-to-alist (plist)
+  (if (or (null plist) (null (cdr plist)))
+    nil
+    (cons (list (car plist) (cadr plist))
+      (gymnast-plist-to-alist (cdr (cdr plist))))))
+
 (defun gymnast-target-language (target)
   (if (consp target) (car target) target))
+
+(defun gymnast-target-language-name (target)
+  (let ((lang (gymnast-target-language target)))
+    (if lang (gymnast-symbol-string lang) "unknown")))
+
+(defun gymnast-flat-map (fn xs)
+  (reduce #'append (mapcar fn xs) nil))
+
+(defun gymnast-nodes-of-kind (nodes kind)
+  (filter (lambda (node) (equal (gymnast-ir-node-kind node) kind))
+    nodes))
 
 (defun gymnast-tagged-p (tag x)
   (and (consp x) (equal (car x) tag)))
@@ -157,8 +174,7 @@
     (gymnast-ir-field ir 'synthesis)))
 
 (defun gymnast-ir-nodes-of-kind (ir kind)
-  (filter (lambda (node) (equal (gymnast-ir-node-kind node) kind))
-    (gymnast-ir-all-nodes ir)))
+  (gymnast-nodes-of-kind (gymnast-ir-all-nodes ir) kind))
 
 (defun gymnast-ir-node-ids (nodes)
   (mapcar #'gymnast-ir-node-id nodes))

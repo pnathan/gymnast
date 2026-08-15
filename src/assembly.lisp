@@ -20,21 +20,19 @@
 ;;; that every declared artifact is present and no untracked files exist.
 
 (defun gymnast-collect-artifacts (results)
-  (reduce #'append
-    (mapcar
-      (lambda (result)
-        (let ((candidate (gymnast-assoc-value 'candidate (cdr result))))
-          (if (and candidate (gymnast-tagged-p 'candidate candidate))
-            (let ((files (gymnast-candidate-field candidate 'files)))
-              (mapcar (lambda (f)
-                  (make-gymnast-artifact (car f)
-                    (gymnast-assoc-value 'node-id (cdr result))
-                    (gymnast-fingerprint-string (cadr f))
-                    (length (cadr f))))
-                (or files nil)))
-            nil)))
-      results)
-    nil))
+  (gymnast-flat-map
+    (lambda (result)
+      (let ((candidate (gymnast-assoc-value 'candidate (cdr result))))
+        (if (and candidate (gymnast-tagged-p 'candidate candidate))
+          (let ((files (gymnast-candidate-field candidate 'files)))
+            (mapcar (lambda (f)
+                (make-gymnast-artifact (car f)
+                  (gymnast-assoc-value 'node-id (cdr result))
+                  (gymnast-fingerprint-string (cadr f))
+                  (length (cadr f))))
+              (or files nil)))
+          nil)))
+    results))
 
 (defun gymnast-artifact-field (artifact key)
   (record-ref artifact key))
@@ -43,11 +41,9 @@
 
 (defun gymnast-validate-artifacts (plan artifacts)
   (let* ((nodes (gymnast-plan-field plan 'nodes))
-      (declared-paths (reduce #'append
-          (mapcar (lambda (n)
-              (gymnast-plan-node-field n 'may-write))
-            nodes)
-          nil))
+      (declared-paths (gymnast-flat-map
+          (lambda (n) (gymnast-plan-node-field n 'may-write))
+          nodes))
       (actual-paths (mapcar
           (lambda (a) (gymnast-artifact-field a 'path))
           artifacts))
@@ -72,17 +68,13 @@
 (defun gymnast-validate-capability-edges (plan)
   (let* ((nodes (gymnast-plan-field plan 'nodes))
       (all-capabilities
-        (reduce #'append
-          (mapcar (lambda (n)
-              (gymnast-plan-node-field n 'capabilities))
-            nodes)
-          nil))
+        (gymnast-flat-map
+          (lambda (n) (gymnast-plan-node-field n 'capabilities))
+          nodes))
       (all-prohibitions
-        (reduce #'append
-          (mapcar (lambda (n)
-              (gymnast-plan-node-field n 'prohibitions))
-            nodes)
-          nil))
+        (gymnast-flat-map
+          (lambda (n) (gymnast-plan-node-field n 'prohibitions))
+          nodes))
       (violations (filter
           (lambda (cap) (member cap all-prohibitions))
           all-capabilities)))
@@ -122,17 +114,15 @@
     (gymnast-ir-all-nodes ir)))
 
 (defun gymnast-traceability-diagnostics (traceability)
-  (reduce #'append
-    (mapcar
-      (lambda (entry)
-        (let ((id (gymnast-traceability-entry-field entry 'semantic-id))
-            (has-impl (gymnast-traceability-entry-field
-                entry 'has-implementation)))
-          (if has-impl nil
-            (list (gymnast-diagnostic 'warning 'unimplemented-semantic-node
-                id "semantic node has no implementation path" id)))))
-      traceability)
-    nil))
+  (gymnast-flat-map
+    (lambda (entry)
+      (let ((id (gymnast-traceability-entry-field entry 'semantic-id))
+          (has-impl (gymnast-traceability-entry-field
+              entry 'has-implementation)))
+        (if has-impl nil
+          (list (gymnast-diagnostic 'warning 'unimplemented-semantic-node
+              id "semantic node has no implementation path" id)))))
+    traceability))
 
 ;;; Dependency lock: snapshot of exact recipe and tool versions.
 
@@ -182,15 +172,26 @@
       (summary (gymnast-bundle-field bundle 'summary))
       (all-succeeded (equal
           (gymnast-assoc-value 'failed-nodes summary) 0))
+      (verification (gymnast-bundle-field bundle 'verification))
+      (verify-summary (if verification
+          (gymnast-verification-bundle-field verification 'summary)
+          nil))
+      (verify-failed (if verify-summary
+          (gymnast-assoc-value 'failed verify-summary)
+          0))
+      (verification-passed (or (not verification)
+          (equal verify-failed 0)))
       (traceability (gymnast-bundle-field bundle 'traceability))
       (all-traced (gymnast-all
           (lambda (entry)
-            (gymnast-traceability-entry-field entry 'has-implementation))
+            (and (gymnast-traceability-entry-field entry 'has-implementation)
+              (gymnast-traceability-entry-field entry 'has-evidence)))
           traceability))
       (checks
         (list
           (list 'no-error-diagnostics (not has-errors))
           (list 'all-nodes-succeeded all-succeeded)
+          (list 'verification-passed verification-passed)
           (list 'traceability-complete all-traced)))
       (all-pass (gymnast-all #'cadr checks)))
     (list 'promotion-result

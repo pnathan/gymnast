@@ -152,12 +152,9 @@
 
 (defun gymnast-design-contracts-executor (ir-slice node)
   (let* ((nl (code-char 10))
-      (types (filter (lambda (n)
-            (equal (gymnast-ir-node-kind n) 'type)) ir-slice))
-      (actors (filter (lambda (n)
-            (equal (gymnast-ir-node-kind n) 'actor)) ir-slice))
-      (components (filter (lambda (n)
-            (equal (gymnast-ir-node-kind n) 'component)) ir-slice))
+      (types (gymnast-nodes-of-kind ir-slice 'type))
+      (actors (gymnast-nodes-of-kind ir-slice 'actor))
+      (components (gymnast-nodes-of-kind ir-slice 'component))
       (type-code (gymnast-join-strings
           (mapcar (lambda (n)
               (gymnast-emit-type-declaration $gymnast-ruby-target n))
@@ -221,8 +218,7 @@
 
 (defun gymnast-interface-contracts-executor (ir-slice node)
   (let* ((nl (code-char 10))
-      (interfaces (filter (lambda (n)
-            (equal (gymnast-ir-node-kind n) 'interface)) ir-slice))
+      (interfaces (gymnast-nodes-of-kind ir-slice 'interface))
       (content (concat
           (gymnast-emit-comment-header $gymnast-ruby-target "Interface contracts")
           (gymnast-join-strings
@@ -256,12 +252,9 @@
 
 (defun gymnast-acceptance-harness-executor (ir-slice node)
   (let* ((nl (code-char 10))
-      (behaviors (filter (lambda (n)
-            (equal (gymnast-ir-node-kind n) 'behavior)) ir-slice))
-      (invariants (filter (lambda (n)
-            (equal (gymnast-ir-node-kind n) 'invariant)) ir-slice))
-      (acceptances (filter (lambda (n)
-            (equal (gymnast-ir-node-kind n) 'acceptance)) ir-slice))
+      (behaviors (gymnast-nodes-of-kind ir-slice 'behavior))
+      (invariants (gymnast-nodes-of-kind ir-slice 'invariant))
+      (acceptances (gymnast-nodes-of-kind ir-slice 'acceptance))
       (content (concat
           (gymnast-emit-comment-header $gymnast-ruby-target "Acceptance harness")
           "require_relative '../gymnast_platform'" nl
@@ -310,10 +303,8 @@
 
 (defun gymnast-application-assembly-executor (ir-slice node)
   (let* ((nl (code-char 10))
-      (apps (filter (lambda (n)
-            (equal (gymnast-ir-node-kind n) 'application)) ir-slice))
-      (syntheses (filter (lambda (n)
-            (equal (gymnast-ir-node-kind n) 'synthesis)) ir-slice))
+      (apps (gymnast-nodes-of-kind ir-slice 'application))
+      (syntheses (gymnast-nodes-of-kind ir-slice 'synthesis))
       (app-name (if apps
           (gymnast-ir-node-field (car apps) 'name)
           'application))

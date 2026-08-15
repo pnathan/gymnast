@@ -91,7 +91,7 @@
       (caps (gymnast-plan-node-field node 'capabilities))
       (target (gymnast-plan-node-field node 'target))
       (kit-caps (gymnast-platform-capabilities-for-target target)))
-    (if (or (null caps) (equal caps '((none))))
+    (if (null caps)
       ""
       (concat "CAPABILITY CONTRACTS" nl
         (gymnast-join-strings
@@ -137,10 +137,7 @@
 
 (defun gymnast-project-state-model (ir-slice)
   (let* ((nl (code-char 10))
-      (state-nodes (filter
-          (lambda (node)
-            (equal (gymnast-ir-node-kind node) 'state))
-          ir-slice)))
+      (state-nodes (gymnast-nodes-of-kind ir-slice 'state)))
     (if (null state-nodes) ""
       (concat "STATE MODEL" nl
         (gymnast-join-strings
@@ -188,10 +185,7 @@
 
 (defun gymnast-project-type-reference (ir-slice)
   (let* ((nl (code-char 10))
-      (type-nodes (filter
-          (lambda (node)
-            (equal (gymnast-ir-node-kind node) 'type))
-          ir-slice)))
+      (type-nodes (gymnast-nodes-of-kind ir-slice 'type)))
     (if (null type-nodes) ""
       (concat "TYPE REFERENCE" nl
         (gymnast-join-strings
@@ -277,10 +271,7 @@
 
 (defun gymnast-project-behavioral-reference (ir-slice)
   (let* ((nl (code-char 10))
-      (behavior-nodes (filter
-          (lambda (node)
-            (equal (gymnast-ir-node-kind node) 'behavior))
-          ir-slice)))
+      (behavior-nodes (gymnast-nodes-of-kind ir-slice 'behavior)))
     (if (null behavior-nodes) ""
       (concat "BEHAVIORAL REFERENCE" nl
         (gymnast-join-strings
@@ -288,11 +279,6 @@
           nl) nl nl))))
 
 ;;; Target language formatting.
-
-(defun gymnast-target-language-name (target)
-  (if (consp target)
-    (gymnast-symbol-string (car target))
-    (if target (gymnast-symbol-string target) "unknown")))
 
 (defun gymnast-target-framework-hint (target)
   (if (not (consp target)) ""

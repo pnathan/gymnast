@@ -66,10 +66,8 @@
         (if schema nil
           (list (gymnast-diagnostic 'error 'missing-schema "ir"
               "IR is missing schema version" nil)))
-        (reduce #'append
-          (mapcar #'gymnast-validate-ir-node-canonical
-            (gymnast-ir-all-nodes ir))
-          nil)))))
+        (gymnast-flat-map #'gymnast-validate-ir-node-canonical
+          (gymnast-ir-all-nodes ir))))))
 
 (defun gymnast-validate-plan-canonical (plan)
   (if (not (gymnast-tagged-p 'plan plan))
@@ -80,10 +78,8 @@
         (if schema nil
           (list (gymnast-diagnostic 'error 'missing-schema "plan"
               "plan is missing schema version" nil)))
-        (reduce #'append
-          (mapcar #'gymnast-validate-plan-node-canonical
-            (gymnast-plan-field plan 'nodes))
-          nil)))))
+        (gymnast-flat-map #'gymnast-validate-plan-node-canonical
+          (gymnast-plan-field plan 'nodes))))))
 
 (defun gymnast-assert-canonical-ir (ir)
   (let ((diagnostics (gymnast-validate-ir-canonical ir)))
