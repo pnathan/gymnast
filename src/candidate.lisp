@@ -53,7 +53,7 @@
                   "candidate reported an unresolved contract"
                   (gymnast-candidate-field candidate 'unresolved)))))
           (target-lang (gymnast-plan-node-field node 'target))
-          (target-key (if (consp target-lang) (car target-lang) target-lang))
+          (target-key (gymnast-target-language target-lang))
           (non-lisp-target (and target-key
               (not (equal target-key 'lamedh))
               (not (equal target-key 'lisp))
@@ -91,7 +91,7 @@
             (if (and edge-uses-raw (listp edge-uses-raw))
               edge-uses-raw nil))
           (bad-edges
-            (if (and edge-uses (not (equal declared-caps '((none)))))
+            (if edge-uses
               (mapcar
                 (lambda (edge)
                   (gymnast-diagnostic

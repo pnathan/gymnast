@@ -989,13 +989,25 @@
   (let* ((ir (gymnast-elaborate gymnast-test-spec))
       (plan (gymnast-plan ir))
       (results (make-test-execution-results ir plan))
-      (verification (gymnast-compile-verification ir))
-      (bundle (gymnast-assemble-bundle ir plan results verification))
+      (bundle (gymnast-assemble-bundle ir plan results nil))
       (policy (gymnast-default-promotion-policy))
       (result (gymnast-evaluate-promotion policy bundle)))
     (assert-true (gymnast-tagged-p 'promotion-result result))
     (assert-equal
       (gymnast-promotion-result-field result 'decision) 'promote)))
+
+(deftest promotion-holds-on-failed-verification
+  (let* ((ir (gymnast-elaborate gymnast-test-spec))
+      (plan (gymnast-plan ir))
+      (results (make-test-execution-results ir plan))
+      (verification (gymnast-compile-verification ir))
+      (bundle (gymnast-assemble-bundle ir plan results verification))
+      (policy (gymnast-default-promotion-policy))
+      (result (gymnast-evaluate-promotion policy bundle))
+      (checks (gymnast-promotion-result-field result 'checks)))
+    (assert-equal
+      (gymnast-promotion-result-field result 'decision) 'hold)
+    (assert-equal (cadr (assoc 'verification-passed checks)) nil)))
 
 (deftest promotion-holds-on-failed-nodes
   (let* ((ir (gymnast-elaborate gymnast-test-spec))

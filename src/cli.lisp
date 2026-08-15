@@ -17,7 +17,7 @@
 
 (defun gymnast-cli-write-value (directory filename value)
   (write-file (concat directory "/" filename)
-    (concat (prin1-to-string value) (code-char 10))))
+    (gymnast-canonical-serialize value)))
 
 (defun gymnast-cli-write-compilation (directory compilation)
   (create-directory directory)
@@ -56,7 +56,7 @@
           (if (< (length args) 4)
             (progn (gymnast-cli-usage) (exit 2))
             (gymnast-cli-write-compilation
-              (cadddr args) (gymnast-compile surface))))
+              (cadddr args) (gymnast-compile-ir ir))))
         (t
           (gymnast-cli-usage)
           (exit 2))))))

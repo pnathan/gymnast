@@ -218,18 +218,16 @@
 
 (defun gymnast-lower-acceptance-obligations (ir)
   (let ((acceptance-nodes (gymnast-ir-nodes-of-kind ir 'acceptance)))
-    (reduce #'append
-      (mapcar
-        (lambda (node)
-          (let* ((id (gymnast-ir-node-id node))
-              (env (gymnast-extract-execution-env node))
-              (clauses (gymnast-ir-node-field node 'clauses)))
-            (filter (lambda (x) x)
-              (mapcar
-                (lambda (clause) (gymnast-lower-clause id clause env))
-                clauses))))
-        acceptance-nodes)
-      nil)))
+    (gymnast-flat-map
+      (lambda (node)
+        (let* ((id (gymnast-ir-node-id node))
+            (env (gymnast-extract-execution-env node))
+            (clauses (gymnast-ir-node-field node 'clauses)))
+          (filter (lambda (x) x)
+            (mapcar
+              (lambda (clause) (gymnast-lower-clause id clause env))
+              clauses))))
+      acceptance-nodes)))
 
 (defun gymnast-lower-invariant-obligations (ir)
   (mapcar #'gymnast-lower-invariant-obligation
@@ -383,7 +381,14 @@
           (covered-count (+ (length property-obs) (length scenario-obs)
               (length fault-obs)))
           (transition-count (length transitions))
-          (invariant-count (length invariants)))
+          (invariant-count (length invariants))
+          (invariant-obs (filter
+              (lambda (ob)
+                (equal (gymnast-obligation-field ob 'kind) 'invariant))
+              obligations))
+          (behavior-count (length behaviors))
+          (operation-obs (+ (length property-obs) (length scenario-obs)))
+          (error-obs (length fault-obs)))
         (list 'coverage-analysis
           (list 'property-obligations (length property-obs))
           (list 'scenario-obligations (length scenario-obs))
@@ -398,14 +403,20 @@
                 (list (list 'gap 'uncovered-transitions
                     (- transition-count covered-count)))
                 nil)
+              (if (and want-ops
+                  (> behavior-count operation-obs))
+                (list (list 'gap 'uncovered-operations
+                    (- behavior-count operation-obs)))
+                nil)
+              (if (and want-errors
+                  (> behavior-count error-obs))
+                (list (list 'gap 'uncovered-error-paths
+                    (- behavior-count error-obs)))
+                nil)
               (if (and want-invariants
-                  (> invariant-count
-                    (length (filter
-                        (lambda (ob)
-                          (equal (gymnast-obligation-field ob 'kind)
-                            'invariant))
-                        obligations))))
-                (list (list 'gap 'uncovered-invariants 0))
+                  (> invariant-count (length invariant-obs)))
+                (list (list 'gap 'uncovered-invariants
+                    (- invariant-count (length invariant-obs))))
                 nil))))))))
 
 ;;; Verification result construction.
@@ -451,19 +462,17 @@
 ;;; Verify a scenario obligation step-by-step.
 
 (defun gymnast-scenario-trace-steps (steps)
-  (reduce #'append
-    (mapcar
-      (lambda (step)
-        (let ((head (car step)))
-          (cond
-            ((equal head 'given) nil)
-            ((equal head 'when)
-              (let ((action (cadr step)))
-                (if (consp action) (list action) nil)))
-            ((equal head 'then) nil)
-            (t nil))))
-      steps)
-    nil))
+  (gymnast-flat-map
+    (lambda (step)
+      (let ((head (car step)))
+        (cond
+          ((equal head 'given) nil)
+          ((equal head 'when)
+            (let ((action (cadr step)))
+              (if (consp action) (list action) nil)))
+          ((equal head 'then) nil)
+          (t nil))))
+    steps))
 
 (defun gymnast-verify-scenario-against-reference (ir obligation)
   (let* ((ob-id (gymnast-obligation-field obligation 'id))

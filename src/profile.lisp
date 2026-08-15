@@ -32,12 +32,6 @@
 ;;; for mandatory decisions.  Arguments arrive as a flat plist from
 ;;; the use-profile macro expansion.
 
-(defun gymnast-plist-to-alist (plist)
-  (if (or (null plist) (null (cdr plist)))
-    nil
-    (cons (list (car plist) (cadr plist))
-      (gymnast-plist-to-alist (cdr (cdr plist))))))
-
 (defun gymnast-validate-profile-params-rec (params args subject)
   (if (null params)
     (list nil nil)

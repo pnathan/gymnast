@@ -17,9 +17,8 @@
 (include "adequacy.lisp")
 (include "serialize.lisp")
 
-(defun gymnast-compile (surface)
-  (let* ((ir (gymnast-elaborate surface))
-      (plan (gymnast-plan ir))
+(defun gymnast-compile-ir (ir)
+  (let* ((plan (gymnast-plan ir))
       (prompts (gymnast-compile-prompts ir plan))
       (base
         (list 'compilation
@@ -28,6 +27,9 @@
           (list 'plan plan)
           (list 'prompts prompts))))
     (append base (list (list 'fingerprint (gymnast-fingerprint base))))))
+
+(defun gymnast-compile (surface)
+  (gymnast-compile-ir (gymnast-elaborate surface)))
 
 (defun gymnast-compilation-field (compilation key)
   (gymnast-assoc-value key (cdr compilation)))

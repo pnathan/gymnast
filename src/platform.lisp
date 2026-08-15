@@ -55,7 +55,7 @@
     (filter (lambda (x) x)
       (mapcar
         (lambda (cap)
-          (if (or (equal cap '(none)) (member cap available))
+          (if (member cap available)
             nil
             (gymnast-diagnostic 'error 'undeclared-capability node-id
               (concat "capability not provided by platform kit: "
@@ -65,10 +65,9 @@
 
 (defun gymnast-validate-plan-capabilities (plan kit)
   (let ((nodes (gymnast-plan-field plan 'nodes)))
-    (reduce #'append
-      (mapcar (lambda (node) (gymnast-validate-node-capabilities node kit))
-        nodes)
-      nil)))
+    (gymnast-flat-map
+      (lambda (node) (gymnast-validate-node-capabilities node kit))
+      nodes)))
 
 ;;; Reference platform kit: gymnast-ruby-platform-v1
 ;;;

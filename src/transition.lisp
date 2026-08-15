@@ -99,10 +99,9 @@
       (gymnast-check-state-refs ir writes id))))
 
 (defun gymnast-check-all-transitions (ir transitions)
-  (reduce #'append
-    (mapcar (lambda (tr) (gymnast-check-transition-refs ir tr))
-      transitions)
-    nil))
+  (gymnast-flat-map
+    (lambda (tr) (gymnast-check-transition-refs ir tr))
+    transitions))
 
 ;;; Reference state machine.
 
