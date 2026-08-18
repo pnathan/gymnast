@@ -6,10 +6,6 @@
   :owner product
   :exports (UserId ListId TaskId TodoList Task todo-service)
 
-  (use-profile oddities/profiles/todo-standard "1.0"
-    :sharing-limit 256
-    :identity-provider google)
-
   (application todo
     :modules (todo-spec)
     :default-acceptance production)

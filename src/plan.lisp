@@ -104,7 +104,7 @@
       (interfaces
         (gymnast-plan-node
           interface-id 'structural 'interface-contracts-v1
-          (gymnast-ids-for-kinds ir '(type interface))
+          (gymnast-ids-for-kinds ir '(type interface port))
           (list design-id) target '(none)
           (funcall tp '("generated/interfaces/contracts.lisp")) nil
           '(complete-operation-surface declared-errors-only)
@@ -112,7 +112,7 @@
       (handlers
         (gymnast-plan-node
           handler-id 'generative 'service-handlers-v1
-          (gymnast-ids-for-kinds ir '(interface behavior state constraint))
+          (gymnast-ids-for-kinds ir '(interface port behavior state constraint))
           (list transition-id auth-id persistence-id interface-id)
           target model
           (funcall tp '("generated/service/handlers.lisp"))

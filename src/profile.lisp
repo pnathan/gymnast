@@ -70,7 +70,14 @@
       (version (gymnast-keyword-value ops ':version))
       (profile (gymnast-lookup-profile profile-name version)))
     (if (not profile)
-      (list nil nil)
+      (let ((subject (concat (gymnast-symbol-string module-name)
+              "/import/" (gymnast-symbol-string profile-name))))
+        (list nil
+          (list (gymnast-diagnostic 'error 'unknown-profile subject
+              (concat "profile not registered: "
+                (princ-to-string profile-name)
+                " version " (princ-to-string version))
+              (list profile-name version)))))
       (let* ((arguments (gymnast-keyword-value ops ':arguments))
           (subject (concat (gymnast-symbol-string module-name)
               "/import/" (gymnast-symbol-string profile-name)))
