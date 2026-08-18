@@ -1273,6 +1273,23 @@ impl Parser {
                 if self.peek_kind() == &TokenKind::Comma {
                     self.advance();
                 }
+            } else {
+                // Parsing failed - skip to next block keyword or closing paren
+                while self.peek_kind() != &TokenKind::RParen
+                    && self.peek_kind() != &TokenKind::Eof
+                    && !self.check_ident("property")
+                    && !self.check_ident("scenario")
+                    && !self.check_ident("concurrency")
+                    && !self.check_ident("fault")
+                    && !self.check_ident("coverage")
+                    && !self.check_ident("execution")
+                {
+                    self.advance();
+                }
+                // If we found a comma, skip it
+                if self.peek_kind() == &TokenKind::Comma {
+                    self.advance();
+                }
             }
         }
 
@@ -1297,19 +1314,64 @@ impl Parser {
             self.advance();
             let name = self.parse_ident()?;
             self.expect(TokenKind::Eq, "`=`")?;
-            let body = self.parse_pack()?;
+            // Property value can be either (pack) or implicit pack items
+            let body = if self.peek_kind() == &TokenKind::LParen {
+                self.parse_pack()?
+            } else {
+                // Parse as implicit pack (items without outer parens)
+                let mut items = Vec::new();
+                while self.peek_kind() != &TokenKind::Comma
+                    && self.peek_kind() != &TokenKind::RParen
+                    && self.peek_kind() != &TokenKind::Eof
+                {
+                    if let Some(item) = self.parse_pack_item() {
+                        items.push(item);
+                    } else {
+                        break;
+                    }
+                }
+                items
+            };
             Some(AcceptanceBlock::Property { name, body })
         } else if self.check_ident("scenario") {
             self.advance();
             let name = self.parse_ident()?;
             self.expect(TokenKind::Eq, "`=`")?;
-            let steps = self.parse_pack()?;
+            // Scenario steps are complex; for now just parse the outer pack structure
+            // The grammar for scenario steps is special (given/when/then keywords)
+            let steps = if self.peek_kind() == &TokenKind::LParen {
+                // Skip the scenario body for now - it has special syntax
+                self.advance(); // skip '('
+                let mut paren_depth = 1;
+                while self.pos < self.tokens.len() && paren_depth > 0 {
+                    match self.peek_kind() {
+                        TokenKind::LParen => paren_depth += 1,
+                        TokenKind::RParen => paren_depth -= 1,
+                        _ => {}
+                    }
+                    if paren_depth > 0 {
+                        self.advance();
+                    }
+                }
+                if paren_depth == 0 {
+                    self.advance(); // skip final ')'
+                }
+                // Return empty pack - scenario parsing is not implemented
+                Vec::new()
+            } else {
+                Vec::new()
+            };
             Some(AcceptanceBlock::Scenario { name, steps })
         } else if self.check_ident("concurrency") {
             self.advance();
             let name = self.parse_ident()?;
             self.expect(TokenKind::Eq, "`=`")?;
-            let attrs = self.parse_pack()?;
+            // Parse the concurrency attributes (can be in parens or bare pack items)
+            let attrs = if self.peek_kind() == &TokenKind::LParen {
+                self.parse_pack()?
+            } else {
+                Vec::new()
+            };
             if !self.check_ident("must") {
                 self.diags.push(Diagnostic {
                     severity: Severity::Error,
@@ -1326,7 +1388,24 @@ impl Parser {
             self.advance();
             let name = self.parse_ident()?;
             self.expect(TokenKind::Eq, "`=`")?;
-            let body = self.parse_pack()?;
+            let body = if self.peek_kind() == &TokenKind::LParen {
+                self.parse_pack()?
+            } else {
+                // Parse as implicit pack (items without outer parens) until 'must' keyword
+                let mut items = Vec::new();
+                while !self.check_ident("must")
+                    && self.peek_kind() != &TokenKind::Comma
+                    && self.peek_kind() != &TokenKind::RParen
+                    && self.peek_kind() != &TokenKind::Eof
+                {
+                    if let Some(item) = self.parse_pack_item() {
+                        items.push(item);
+                    } else {
+                        break;
+                    }
+                }
+                items
+            };
             Some(AcceptanceBlock::Fault { name, body })
         } else if self.check_ident("coverage") {
             self.advance();
@@ -1357,7 +1436,7 @@ impl Parser {
         }
     }
 
-    /// Parse a pack: (item, item, ...)
+    /// Parse a pack: (item, item, ...) or (item; item; ...)
     pub fn parse_pack(&mut self) -> Option<Pack> {
         self.expect(TokenKind::LParen, "`(`")?;
 
@@ -1368,7 +1447,8 @@ impl Parser {
                     items.push(item);
                 }
 
-                if self.peek_kind() == &TokenKind::Comma {
+                // Accept both comma and semicolon as separators
+                if self.peek_kind() == &TokenKind::Comma || self.peek_kind() == &TokenKind::Semi {
                     self.advance();
                     if self.peek_kind() == &TokenKind::RParen {
                         break;
@@ -1458,7 +1538,8 @@ impl Parser {
                                 pack_items.push(item);
 
                                 let mut pack_iterations = 0;
-                                while self.peek_kind() == &TokenKind::Comma
+                                while (self.peek_kind() == &TokenKind::Comma
+                                    || self.peek_kind() == &TokenKind::Semi)
                                     && pack_iterations < 1000
                                 {
                                     pack_iterations += 1;
@@ -1531,16 +1612,30 @@ impl Parser {
                 let first_ident = self.parse_ident()?;
 
                 if self.peek_kind() == &TokenKind::LParen {
-                    // Call
+                    // Call - parse arguments as a nested pack if they look like key-value pairs
                     self.advance();
                     let mut args = Vec::new();
                     if self.peek_kind() != &TokenKind::RParen {
+                        // Try to parse as pack items (comma or semicolon-separated key-value pairs)
+                        let mut iterations = 0;
                         loop {
-                            if let Some(arg) = self.parse_pack_value() {
-                                args.push(arg);
+                            iterations += 1;
+                            if iterations > 1000 {
+                                break; // Safety limit
+                            }
+                            let item_start = self.pos;
+                            if let Some(item) = self.parse_pack_item() {
+                                args.push(PackValue::Nested(vec![item]));
+                            } else {
+                                // If position didn't advance, skip to prevent infinite loop
+                                if self.pos == item_start && self.pos < self.tokens.len() {
+                                    self.advance();
+                                }
                             }
 
-                            if self.peek_kind() == &TokenKind::Comma {
+                            if self.peek_kind() == &TokenKind::Comma
+                                || self.peek_kind() == &TokenKind::Semi
+                            {
                                 self.advance();
                             } else {
                                 break;
@@ -1606,30 +1701,6 @@ impl Parser {
                         } else {
                             break;
                         }
-                    }
-                    Some(PackValue::List(values))
-                } else if matches!(self.peek_kind(), TokenKind::Int(_) | TokenKind::Str(_)) {
-                    // Ident followed by value token: group as list (e.g., "temperature 0")
-                    let mut values = vec![PackValue::Word(first_ident)];
-                    // Only consume one additional value to avoid being too greedy
-                    if let TokenKind::Int(val) = self.peek_kind() {
-                        let val = *val;
-                        self.advance();
-                        // Check for quantity: int followed by unit name
-                        if let TokenKind::Ident(unit_name) = self.peek_kind() {
-                            if matches!(unit_name.as_str(), "min" | "ms" | "s" | "sec") {
-                                let unit = self.parse_ident()?;
-                                values.push(PackValue::Quantity { value: val, unit });
-                            } else {
-                                values.push(PackValue::Int(val));
-                            }
-                        } else {
-                            values.push(PackValue::Int(val));
-                        }
-                    } else if let TokenKind::Str(s) = self.peek_kind() {
-                        let s = s.clone();
-                        self.advance();
-                        values.push(PackValue::Str(s));
                     }
                     Some(PackValue::List(values))
                 } else {

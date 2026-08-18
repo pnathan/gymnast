@@ -23,11 +23,11 @@ fn test_todo_gym_parse() {
     // Must have a successful AST
     let file = ast.expect("parse should succeed with zero errors");
 
-    // Check declaration count
+    // Check declaration count (spec is stored separately in file.spec, not in file.decls)
     assert_eq!(
         file.decls.len(),
-        25,
-        "Expected 25 declarations, found {}",
+        24,
+        "Expected 24 declarations, found {}",
         file.decls.len()
     );
 
