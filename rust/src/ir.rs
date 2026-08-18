@@ -55,6 +55,12 @@ impl IrNode {
 
         Sexpr::list(vec![Sexpr::sym("ir-node"), Sexpr::list(items)])
     }
+
+    /// Field lookup by exact key (keys carry the leading colon:
+    /// `node.field(":owner")`).
+    pub fn field(&self, key: &str) -> Option<&Sexpr> {
+        self.fields.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,26 +131,27 @@ impl Ir {
         all
     }
 
+    /// All nodes (any partition) whose `kind` equals `kind`, in
+    /// partition order and id-sorted within each partition (the order
+    /// `all_nodes` already establishes).
+    pub fn nodes_of_kind(&self, kind: &str) -> Vec<&IrNode> {
+        self.all_nodes()
+            .into_iter()
+            .filter(|n| n.kind == kind)
+            .collect()
+    }
+
+    /// The node (any partition) with the given id, if any.
+    pub fn find_node(&self, id: &str) -> Option<&IrNode> {
+        self.all_nodes().into_iter().find(|n| n.id == id)
+    }
+
     pub fn has_errors(&self) -> bool {
         self.diagnostics.iter().any(|diag| {
-            if let Sexpr::List(items) = diag {
-                for item in items {
-                    if let Sexpr::List(pair) = item {
-                        if pair.len() == 2 {
-                            if let Sexpr::Sym(key) = &pair[0] {
-                                if key == "severity" {
-                                    if let Sexpr::Sym(severity) = &pair[1] {
-                                        if severity == "error" {
-                                            return true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            false
+            diag.assoc("severity")
+                .and_then(|s| s.as_sym())
+                .map(|s| s == "error")
+                .unwrap_or(false)
         })
     }
 

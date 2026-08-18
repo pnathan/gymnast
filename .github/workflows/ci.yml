@@ -54,3 +54,21 @@ jobs:
           cargo run -- ir ../examples/todo.gym > /tmp/ir-two.sexpr
           diff /tmp/ir-one.sexpr /tmp/ir-two.sexpr
           diff /tmp/ir-one.sexpr tests/fixtures/todo-ir.sexpr
+      - name: Reproducible plan
+        run: |
+          cargo run -- plan ../examples/todo.gym > /tmp/plan-one.sexpr
+          cargo run -- plan ../examples/todo.gym > /tmp/plan-two.sexpr
+          diff /tmp/plan-one.sexpr /tmp/plan-two.sexpr
+          diff /tmp/plan-one.sexpr tests/fixtures/todo-plan.sexpr
+      - name: Reproducible prompts
+        run: |
+          cargo run -- prompts ../examples/todo.gym > /tmp/prompts-one.sexpr
+          cargo run -- prompts ../examples/todo.gym > /tmp/prompts-two.sexpr
+          diff /tmp/prompts-one.sexpr /tmp/prompts-two.sexpr
+          diff /tmp/prompts-one.sexpr tests/fixtures/todo-prompts.sexpr
+      - name: Reject a known-bad spec (plan)
+        run: |
+          printf 'spec t = v 0.1 owner o exports A\n\nmode A = opaque text\ninv a = on s always p\ninv a = on s always q\n' > /tmp/bad-plan.gym
+          if cargo run -- plan /tmp/bad-plan.gym; then
+            echo "plan accepted a spec with a duplicate semantic id" >&2; exit 1
+          fi

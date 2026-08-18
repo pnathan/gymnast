@@ -1,3 +1,4 @@
+use crate::sexpr::Sexpr;
 use crate::span::Span;
 
 /// Diagnostic severity level.
@@ -75,6 +76,24 @@ pub fn render(diags: &[Diagnostic], src: &str, path: &str) -> String {
     }
 
     output
+}
+
+/// The single canonical lowered-diagnostic Sexpr shape, shared by every
+/// pipeline stage that emits diagnostics into a serialized artifact
+/// (elaboration, planning, ...):
+/// `(diagnostic (severity s) (code "C") (span a b) (message "..."))`.
+pub fn diag_sexpr(severity: &str, code: &str, span: (i64, i64), message: String) -> Sexpr {
+    Sexpr::list(vec![
+        Sexpr::sym("diagnostic"),
+        Sexpr::list(vec![Sexpr::sym("severity"), Sexpr::sym(severity)]),
+        Sexpr::list(vec![Sexpr::sym("code"), Sexpr::Str(code.to_string())]),
+        Sexpr::list(vec![
+            Sexpr::sym("span"),
+            Sexpr::Int(span.0),
+            Sexpr::Int(span.1),
+        ]),
+        Sexpr::list(vec![Sexpr::sym("message"), Sexpr::Str(message)]),
+    ])
 }
 
 #[cfg(test)]

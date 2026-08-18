@@ -865,22 +865,6 @@ fn decl_span(decl: &Decl) -> crate::span::Span {
     }
 }
 
-/// The single canonical diagnostic Sexpr shape:
-/// (diagnostic (severity s) (code "C") (span a b) (message "...")).
-fn diag_sexpr(severity: &str, code: &str, span: (i64, i64), message: String) -> Sexpr {
-    Sexpr::list(vec![
-        Sexpr::sym("diagnostic"),
-        Sexpr::list(vec![Sexpr::sym("severity"), Sexpr::sym(severity)]),
-        Sexpr::list(vec![Sexpr::sym("code"), Sexpr::Str(code.to_string())]),
-        Sexpr::list(vec![
-            Sexpr::sym("span"),
-            Sexpr::Int(span.0),
-            Sexpr::Int(span.1),
-        ]),
-        Sexpr::list(vec![Sexpr::sym("message"), Sexpr::Str(message)]),
-    ])
-}
-
 fn lower_diagnostics(diags: &[Diagnostic]) -> Vec<Sexpr> {
     let mut result = Vec::new();
     for diag in diags {
@@ -888,7 +872,7 @@ fn lower_diagnostics(diags: &[Diagnostic]) -> Vec<Sexpr> {
             Severity::Error => "error",
             Severity::Warning => "warning",
         };
-        let diag_sexpr = diag_sexpr(
+        let diag_sexpr = crate::diag::diag_sexpr(
             severity_str,
             diag.code,
             (diag.span.start as i64, diag.span.end as i64),
