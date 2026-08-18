@@ -42,3 +42,9 @@ jobs:
         run: cargo test
       - name: Check todo.gym fixture
         run: cargo run -- check ../examples/todo.gym
+      - name: Reproducible IR
+        run: |
+          cargo run -- ir ../examples/todo.gym > /tmp/ir-one.sexpr
+          cargo run -- ir ../examples/todo.gym > /tmp/ir-two.sexpr
+          diff /tmp/ir-one.sexpr /tmp/ir-two.sexpr
+          diff /tmp/ir-one.sexpr tests/fixtures/todo-ir.sexpr
