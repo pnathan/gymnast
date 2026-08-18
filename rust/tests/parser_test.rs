@@ -795,14 +795,18 @@ synthesis prototype = target ruby / rails (
             match &model.value {
                 PackValue::Call { name, args } => {
                     assert_eq!(name.text, "small_code_model");
-                    // Each key/value argument is a single-item nested pack.
-                    assert_eq!(args.len(), 3);
-                    match &args[1] {
+                    // A keyword-argument group is ONE combined Nested pack
+                    // (args: [Nested(pack)] per the plan), not N fragments.
+                    assert_eq!(args.len(), 1);
+                    match &args[0] {
                         PackValue::Nested(items) => {
-                            assert_eq!(items[0].key.text, "temperature");
-                            assert!(matches!(items[0].value, PackValue::Int(0)));
+                            assert_eq!(items.len(), 3);
+                            let keys: Vec<&str> =
+                                items.iter().map(|i| i.key.text.as_str()).collect();
+                            assert_eq!(keys, vec!["class", "temperature", "max_attempts"]);
+                            assert!(matches!(items[1].value, PackValue::Int(0)));
                         }
-                        other => panic!("expected Nested arg, got {:?}", other),
+                        other => panic!("expected one combined Nested arg, got {:?}", other),
                     }
                 }
                 other => panic!("expected Call value, got {:?}", other),
@@ -875,4 +879,56 @@ behavior test_behavior = on svc.op (actor, req) (
         }
         _ => panic!("Expected Behavior declaration"),
     }
+}
+
+#[test]
+fn test_pack_group_bare_key_before_valued_key() {
+    // Nested-vs-List is decided over the WHOLE group ("at least one
+    // non-Unit item"), not the first entry alone: `(foo, bar 5)` is a pack.
+    let src = r#"
+spec test = v 0.1 owner o exports X
+
+state s = (of (foo, bar 5))
+"#;
+    let (ast, diags) = parser::parse(src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {:#?}", diags);
+    let file = ast.unwrap();
+    match &file.decls[0] {
+        Decl::State(st) => match &st.attrs[0].value {
+            PackValue::Nested(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0].key.text, "foo");
+                assert!(matches!(items[0].value, PackValue::Unit));
+                assert_eq!(items[1].key.text, "bar");
+                assert!(matches!(items[1].value, PackValue::Int(5)));
+            }
+            other => panic!("expected Nested pack, got {:?}", other),
+        },
+        _ => panic!("Expected State declaration"),
+    }
+}
+
+#[test]
+fn test_trailing_commas_in_error_and_coverage_lists() {
+    let src = r#"
+spec test = v 0.1 owner o exports X
+
+interface svc = for user (
+  cmd f = (X x) X ! (conflict, not_found,) )
+
+acceptance a = of app (
+  coverage (every_operation, boundaries,) )
+"#;
+    let (ast, diags) = parser::parse(src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {:#?}", diags);
+    let file = ast.unwrap();
+    let iface = file
+        .decls
+        .iter()
+        .find_map(|d| match d {
+            Decl::Interface(i) => Some(i),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(iface.ops[0].errors.len(), 2);
 }

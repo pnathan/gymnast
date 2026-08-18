@@ -3,6 +3,13 @@ use crate::diag::{Diagnostic, Severity};
 use crate::lexer::{Lexer, Token, TokenKind};
 use crate::span::Span;
 
+/// A parenthesized group, disambiguated over its WHOLE contents:
+/// key/value pack vs plain value list.
+enum ParenGroup {
+    Pack(Vec<PackItem>),
+    Values(Vec<PackValue>),
+}
+
 /// Parser for the `.gym` surface language.
 pub struct Parser {
     tokens: Vec<Token>,
@@ -891,6 +898,9 @@ impl Parser {
                 errors.push(self.parse_ident()?);
                 if self.peek_kind() == &TokenKind::Comma {
                     self.advance();
+                    if self.peek_kind() == &TokenKind::RParen {
+                        break;
+                    }
                 } else {
                     break;
                 }
@@ -1502,6 +1512,9 @@ impl Parser {
                 names.push(self.parse_ident()?);
                 if self.peek_kind() == &TokenKind::Comma {
                     self.advance();
+                    if self.peek_kind() == &TokenKind::RParen {
+                        break;
+                    }
                 } else {
                     break;
                 }
@@ -1616,6 +1629,82 @@ impl Parser {
         })
     }
 
+    /// Parse the contents of an already-consumed `(` up to and including
+    /// the closing `)`. Entries are comma/semicolon-separated. The group is
+    /// a Pack when every entry is ident-headed AND at least one entry
+    /// carries a non-Unit value (the plan's "at least one" rule — deciding
+    /// from the first entry alone rejects packs like `(foo, bar 5)`);
+    /// otherwise it is a plain value list.
+    fn parse_paren_group(&mut self) -> Option<ParenGroup> {
+        enum Entry {
+            Item(PackItem),
+            Value(PackValue),
+        }
+        let mut entries: Vec<Entry> = Vec::new();
+        while self.peek_kind() != &TokenKind::RParen && self.peek_kind() != &TokenKind::Eof {
+            let iter_start = self.pos;
+            // An ident followed by `.` is a path VALUE (`task.list`), never
+            // a pack-item key; everything else ident-headed parses as a
+            // key/value item (with a Unit value when bare).
+            let ident_headed = matches!(self.peek_kind(), TokenKind::Ident(_));
+            let is_path = ident_headed
+                && matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Dot)
+                );
+            if ident_headed && !is_path {
+                if let Some(item) = self.parse_pack_item() {
+                    entries.push(Entry::Item(item));
+                }
+            } else if let Some(val) = self.parse_pack_value() {
+                entries.push(Entry::Value(val));
+            }
+            // Progress invariant: never retry the same token.
+            if self.pos == iter_start {
+                self.advance();
+            }
+            if self.peek_kind() == &TokenKind::Comma || self.peek_kind() == &TokenKind::Semi {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect(TokenKind::RParen, "`)`")?;
+
+        let all_items = entries.iter().all(|e| matches!(e, Entry::Item(_)));
+        let any_valued = entries
+            .iter()
+            .any(|e| matches!(e, Entry::Item(i) if !matches!(i.value, PackValue::Unit)));
+
+        if all_items && any_valued {
+            Some(ParenGroup::Pack(
+                entries
+                    .into_iter()
+                    .map(|e| match e {
+                        Entry::Item(i) => i,
+                        Entry::Value(_) => unreachable!("all_items checked above"),
+                    })
+                    .collect(),
+            ))
+        } else {
+            Some(ParenGroup::Values(
+                entries
+                    .into_iter()
+                    .map(|e| match e {
+                        Entry::Item(i) => {
+                            if matches!(i.value, PackValue::Unit) {
+                                PackValue::Word(i.key)
+                            } else {
+                                PackValue::Nested(vec![i])
+                            }
+                        }
+                        Entry::Value(v) => v,
+                    })
+                    .collect(),
+            ))
+        }
+    }
+
     /// Parse a pack value.
     pub fn parse_pack_value(&mut self) -> Option<PackValue> {
         match self.peek_kind() {
@@ -1643,131 +1732,23 @@ impl Parser {
             }
             TokenKind::LParen => {
                 self.advance();
-
-                // Try to parse as nested pack (key-value pairs) or plain list
-                let mut pack_items = Vec::new();
-                let mut value_items = Vec::new();
-                let mut is_pack = true;
-
-                if self.peek_kind() != &TokenKind::RParen {
-                    // Peek to determine if this looks like key-value pairs
-                    if let TokenKind::Ident(_) = self.peek_kind() {
-                        let saved_pos = self.pos;
-
-                        // Try to parse first item as key-value
-                        if let Some(item) = self.parse_pack_item() {
-                            // Check if this has a non-Unit value
-                            if !matches!(item.value, PackValue::Unit) {
-                                // This looks like a pack
-                                pack_items.push(item);
-
-                                while self.peek_kind() == &TokenKind::Comma
-                                    || self.peek_kind() == &TokenKind::Semi
-                                {
-                                    self.advance();
-                                    if self.peek_kind() == &TokenKind::RParen {
-                                        break;
-                                    }
-                                    let item_start = self.pos;
-                                    if let Some(item) = self.parse_pack_item() {
-                                        pack_items.push(item);
-                                    } else {
-                                        // If position didn't advance, skip to prevent infinite loop
-                                        if self.pos == item_start && self.pos < self.tokens.len() {
-                                            self.advance();
-                                        }
-                                    }
-                                }
-
-                                self.expect(TokenKind::RParen, "`)`")?;
-                                return Some(PackValue::Nested(pack_items));
-                            } else {
-                                // This is a plain list - reparse as values
-                                self.pos = saved_pos;
-                                is_pack = false;
-                            }
-                        } else {
-                            self.pos = saved_pos;
-                            is_pack = false;
-                        }
-                    } else {
-                        is_pack = false;
-                    }
-
-                    if !is_pack {
-                        // Parse as plain value list. parse_pack_value only
-                        // returns None after consuming or diagnosing, and the
-                        // stuck-check below guarantees loop progress.
-                        loop {
-                            let iter_start = self.pos;
-                            if let Some(val) = self.parse_pack_value() {
-                                value_items.push(val);
-                            } else {
-                                if self.pos == iter_start && self.pos < self.tokens.len() {
-                                    self.advance();
-                                }
-                                break;
-                            }
-
-                            if self.peek_kind() == &TokenKind::Comma {
-                                self.advance();
-                                if self.peek_kind() == &TokenKind::RParen {
-                                    break;
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                self.expect(TokenKind::RParen, "`)`")?;
-
-                if is_pack && !pack_items.is_empty() {
-                    Some(PackValue::Nested(pack_items))
-                } else {
-                    Some(PackValue::List(value_items))
+                match self.parse_paren_group()? {
+                    ParenGroup::Pack(items) => Some(PackValue::Nested(items)),
+                    ParenGroup::Values(vals) => Some(PackValue::List(vals)),
                 }
             }
             TokenKind::Ident(_) => {
                 let first_ident = self.parse_ident()?;
 
                 if self.peek_kind() == &TokenKind::LParen {
-                    // Call - parse arguments as a nested pack if they look like key-value pairs
+                    // Call. A keyword-argument group becomes ONE combined
+                    // Nested pack (`args: [Nested(pack)]` per the plan);
+                    // plain arguments stay a flat value list.
                     self.advance();
-                    let mut args = Vec::new();
-                    if self.peek_kind() != &TokenKind::RParen {
-                        // Each argument is either a plain value (`owner`,
-                        // `256`) or a key/value pair (`class nano`), which
-                        // becomes a single-item Nested pack. The stuck-check
-                        // enforces loop progress.
-                        loop {
-                            let item_start = self.pos;
-                            if let TokenKind::Ident(_) = self.peek_kind() {
-                                if let Some(item) = self.parse_pack_item() {
-                                    if matches!(item.value, PackValue::Unit) {
-                                        args.push(PackValue::Word(item.key));
-                                    } else {
-                                        args.push(PackValue::Nested(vec![item]));
-                                    }
-                                }
-                            } else if let Some(val) = self.parse_pack_value() {
-                                args.push(val);
-                            }
-                            if self.pos == item_start && self.pos < self.tokens.len() {
-                                self.advance();
-                            }
-
-                            if self.peek_kind() == &TokenKind::Comma
-                                || self.peek_kind() == &TokenKind::Semi
-                            {
-                                self.advance();
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                    self.expect(TokenKind::RParen, "`)`")?;
+                    let args = match self.parse_paren_group()? {
+                        ParenGroup::Pack(items) => vec![PackValue::Nested(items)],
+                        ParenGroup::Values(vals) => vals,
+                    };
                     Some(PackValue::Call {
                         name: first_ident,
                         args,
@@ -1932,7 +1913,7 @@ impl Parser {
 
             if self.peek_kind() == &TokenKind::Colon {
                 self.advance();
-            } else if !self.check_ident(":") {
+            } else {
                 self.diags.push(Diagnostic {
                     severity: Severity::Error,
                     code: "E101",

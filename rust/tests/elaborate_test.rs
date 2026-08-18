@@ -930,3 +930,51 @@ mode A = opaque int
         e301
     );
 }
+
+#[test]
+fn test_behavior_with_three_binders_keeps_all() {
+    let ir = elaborate_source(
+        r#"
+spec m = v 0.1 owner o exports A
+
+actor user = person (identity local)
+mode A = opaque text
+
+interface svc = for user (
+  cmd op1 = (A a) A ! (conflict) )
+
+behavior b1 = on svc.op1 (user, request, extra_ctx) (
+  writes results;
+  requires ok;
+  returns result )
+"#,
+    );
+    let fields = node_fields_printed(&ir, "m/behavior/b1");
+    assert!(
+        fields.contains("(:on (svc/op1 user request extra_ctx))"),
+        "every declared binder must survive into :on, got: {}",
+        fields
+    );
+}
+
+#[test]
+fn test_call_keyword_args_lower_to_one_flat_alist() {
+    let ir = elaborate_source(
+        r#"
+spec m = v 0.1 owner o exports A
+
+mode A = opaque text
+
+synthesis proto = target ruby / rails (
+  model small_code_model (class nano, temperature 0, max_attempts 3) )
+"#,
+    );
+    let fields = node_fields_printed(&ir, "m/synthesis/proto");
+    assert!(
+        fields.contains(
+            "(:model (small_code_model ((class nano) (temperature 0) (max_attempts 3))))"
+        ),
+        "keyword call args must lower to one combined alist, got: {}",
+        fields
+    );
+}

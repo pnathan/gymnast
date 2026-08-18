@@ -61,3 +61,18 @@ fn test_ir_stderr_carries_elaboration_diagnostics() {
         stderr
     );
 }
+
+#[test]
+fn test_ir_artifact_carries_parse_diagnostics() {
+    // The serialized IR must be self-describing: a spec that recovered
+    // from a parse error carries that diagnostic in its own diagnostics
+    // list, not only on stderr / in the exit code.
+    let (code, stdout, _) =
+        run_ir("spec m = v 0.1 owner o exports A\n\nmode ! nonsense\n\nmode A = opaque text\n");
+    assert_eq!(code, 1);
+    assert!(
+        stdout.contains("(diagnostics ((diagnostic (severity error)"),
+        "IR diagnostics list must include the parse error, got: {}",
+        stdout
+    );
+}

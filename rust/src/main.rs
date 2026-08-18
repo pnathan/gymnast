@@ -67,10 +67,12 @@ fn cmd_parse(src: &str, file_path: &str, _file_name: &str) {
 fn cmd_check(src: &str, file_path: &str, _file_name: &str) {
     let (ast, mut diags) = parser::parse(src);
 
-    // If parsing succeeded, run the checker
+    // If parsing succeeded, run the checker over the profile-EXPANDED
+    // declarations, so `check` and `ir` agree about what is unknown.
     if let Some(file) = ast {
-        let check_diags = check::check(&file);
-        diags.extend(check_diags);
+        let (expanded, expansion_diags) = elaborate::expand(&file);
+        diags.extend(expansion_diags);
+        diags.extend(check::check(&expanded));
     }
 
     // Render all diagnostics to stderr
@@ -99,12 +101,15 @@ fn cmd_ir(src: &str, file_path: &str, _file_name: &str) {
         None => std::process::exit(1),
     };
 
-    let ir = elaborate::elaborate(&file);
+    // Parse diagnostics are folded into the IR so the serialized artifact
+    // is self-describing; the returned typed list drives stderr rendering.
+    let (ir, all_diags) = elaborate::elaborate_with_parse_diags(&file, &parse_diags);
 
-    // Check and elaboration diagnostics live in the IR, already lowered
-    // against the profile-expanded file; print each in its canonical form.
-    for d in &ir.diagnostics {
-        eprintln!("{}", d.print());
+    // Render check/elaboration diagnostics with source context (the parse
+    // slice was already rendered above).
+    let later_diags = &all_diags[parse_diags.len()..];
+    if !later_diags.is_empty() {
+        eprint!("{}", diag::render(later_diags, src, file_path));
     }
 
     print!("{}", sexpr::canonical_serialize(&ir.to_sexpr()));
