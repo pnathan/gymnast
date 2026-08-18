@@ -864,3 +864,69 @@ mode B = opaque int
         "((:exports (A B)) (:owner alice) (:version \"0.3\"))"
     );
 }
+
+#[test]
+fn test_op_clause_uses_interface_default_actor() {
+    let ir = elaborate_source(
+        r#"
+spec m = v 0.1 owner o exports A
+
+actor admin = person (identity local)
+mode A = opaque text
+
+interface admin_service = for admin (
+  cmd wipe = (A a) A ! (forbidden) )
+"#,
+    );
+    let node = ir
+        .all_nodes()
+        .into_iter()
+        .find(|n| n.id == "m/interface/admin_service")
+        .expect("interface node");
+    let clause = node.clauses[0].print();
+    assert!(
+        clause.contains(":actor admin"),
+        "op clause must carry the interface's default actor, got: {}",
+        clause
+    );
+}
+
+#[test]
+fn test_nested_mode_shapes_preserved() {
+    let ir = elaborate_source(
+        r#"
+spec m = v 0.1 owner o exports A
+
+mode A = struct (opaque text token, union (l text, r int) either)
+"#,
+    );
+    let fields = node_fields_printed(&ir, "m/type/A");
+    assert_eq!(
+        fields, "((:record ((token (opaque text)) (either (variant ((l text) (r int)))))))",
+        "nested opaque and union must keep their wrappers"
+    );
+}
+
+#[test]
+fn test_duplicate_semantic_id_span_points_at_duplicate() {
+    let src = r#"
+spec m = v 0.1 owner o exports A
+
+mode A = opaque text
+mode A = opaque int
+"#;
+    let ir = elaborate_source(src);
+    let e301 = ir
+        .diagnostics
+        .iter()
+        .map(|d| d.print())
+        .find(|p| p.contains("\"E301\""))
+        .expect("E301 present");
+    let dup_offset = src.rfind("mode A").unwrap();
+    assert!(
+        e301.contains(&format!("(span {} ", dup_offset)),
+        "E301 span must point at the duplicate declaration (offset {}), got: {}",
+        dup_offset,
+        e301
+    );
+}

@@ -86,35 +86,35 @@ fn cmd_check(src: &str, file_path: &str, _file_name: &str) {
 
 /// Handle the `ir` subcommand.
 fn cmd_ir(src: &str, file_path: &str, _file_name: &str) {
-    let (ast, mut diags) = parser::parse(src);
+    let (ast, parse_diags) = parser::parse(src);
 
-    // If parsing succeeded, elaborate
-    if let Some(file) = ast {
-        let ir = elaborate::elaborate(&file);
-
-        // Render diagnostics to stderr
-        if !ir.diagnostics.is_empty() {
-            let check_diags = check::check(&file);
-            diags.extend(check_diags);
-            if !diags.is_empty() {
-                let rendered = diag::render(&diags, src, file_path);
-                eprint!("{}", rendered);
-            }
-        }
-
-        // Print IR to stdout
-        let serialized = sexpr::canonical_serialize(&ir.to_sexpr());
-        print!("{}", serialized);
-
-        // Exit with error if any diagnostic is an error
-        let has_errors = ir.has_errors();
-        std::process::exit(if has_errors { 1 } else { 0 });
-    } else {
-        // Render parse diagnostics
-        if !diags.is_empty() {
-            let rendered = diag::render(&diags, src, file_path);
-            eprint!("{}", rendered);
-        }
-        std::process::exit(1);
+    // Parse diagnostics always render to stderr with source context.
+    if !parse_diags.is_empty() {
+        eprint!("{}", diag::render(&parse_diags, src, file_path));
     }
+    let parse_errors = parse_diags.iter().any(|d| d.severity == Severity::Error);
+
+    let file = match ast {
+        Some(file) => file,
+        None => std::process::exit(1),
+    };
+
+    let ir = elaborate::elaborate(&file);
+
+    // Check and elaboration diagnostics live in the IR, already lowered
+    // against the profile-expanded file; print each in its canonical form.
+    for d in &ir.diagnostics {
+        eprintln!("{}", d.print());
+    }
+
+    print!("{}", sexpr::canonical_serialize(&ir.to_sexpr()));
+
+    // Exit 1 on any error-severity diagnostic, parse or IR: a spec that
+    // only partially parsed must not read as valid even when the
+    // surviving declarations elaborate cleanly.
+    std::process::exit(if parse_errors || ir.has_errors() {
+        1
+    } else {
+        0
+    });
 }

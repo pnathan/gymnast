@@ -204,55 +204,31 @@ impl Ir {
     }
 
     pub fn to_sexpr(&self) -> Sexpr {
-        let mut items = vec![Sexpr::pair("schema", Sexpr::Str(self.schema.clone()))];
-
-        // Module
-        let mut module_items = vec![Sexpr::pair("name", Sexpr::sym(&self.module_name))];
-        let mut field_list = Vec::new();
-        for (key, value) in &self.module_fields {
-            field_list.push(Sexpr::list(vec![Sexpr::sym(key), value.clone()]));
+        // Build on the fingerprint-free form so the two can never drift:
+        // the stored fingerprint must always equal the hash of the
+        // serialization minus its fingerprint entry.
+        let base = Ir::to_sexpr_without_fingerprint(
+            &self.schema,
+            &self.module_name,
+            &self.module_fields,
+            &self.design,
+            &self.transitions,
+            &self.obligations,
+            &self.synthesis,
+            &self.diagnostics,
+        );
+        match base {
+            Sexpr::List(mut outer) => {
+                if let Some(Sexpr::List(items)) = outer.last_mut() {
+                    items.push(Sexpr::pair(
+                        "fingerprint",
+                        Sexpr::Str(self.fingerprint.clone()),
+                    ));
+                }
+                Sexpr::List(outer)
+            }
+            other => other,
         }
-        module_items.push(Sexpr::pair("fields", Sexpr::list(field_list)));
-        items.push(Sexpr::pair("module", Sexpr::list(module_items)));
-
-        // Design, transitions, obligations, synthesis
-        let mut design_list = Vec::new();
-        for node in &self.design {
-            design_list.push(node.to_sexpr());
-        }
-        items.push(Sexpr::pair("design", Sexpr::list(design_list)));
-
-        let mut trans_list = Vec::new();
-        for node in &self.transitions {
-            trans_list.push(node.to_sexpr());
-        }
-        items.push(Sexpr::pair("transitions", Sexpr::list(trans_list)));
-
-        let mut oblig_list = Vec::new();
-        for node in &self.obligations {
-            oblig_list.push(node.to_sexpr());
-        }
-        items.push(Sexpr::pair("obligations", Sexpr::list(oblig_list)));
-
-        let mut synth_list = Vec::new();
-        for node in &self.synthesis {
-            synth_list.push(node.to_sexpr());
-        }
-        items.push(Sexpr::pair("synthesis", Sexpr::list(synth_list)));
-
-        // Diagnostics
-        items.push(Sexpr::pair(
-            "diagnostics",
-            Sexpr::list(self.diagnostics.clone()),
-        ));
-
-        // Fingerprint
-        items.push(Sexpr::pair(
-            "fingerprint",
-            Sexpr::Str(self.fingerprint.clone()),
-        ));
-
-        Sexpr::list(vec![Sexpr::sym("ir"), Sexpr::list(items)])
     }
 }
 
