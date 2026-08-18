@@ -142,12 +142,28 @@ fn content_hint(target: &Sexpr) -> &'static str {
     }
 }
 
+/// Content hint for one output PATH: non-source artifacts (.sexpr) must
+/// never be told they contain target-language source — the extension
+/// rewriter deliberately exempts them for exactly that reason.
+fn content_hint_for_path<'a>(path: &str, language_hint: &'a str) -> &'a str {
+    if path.ends_with(".sexpr") {
+        "<canonical S-expression>"
+    } else {
+        language_hint
+    }
+}
+
 fn build_output_protocol(node: &PlanNode) -> Sexpr {
     let hint = content_hint(&node.target);
     let files: Vec<Sexpr> = node
         .may_write
         .iter()
-        .map(|path| Sexpr::list(vec![Sexpr::Str(path.clone()), Sexpr::Str(hint.to_string())]))
+        .map(|path| {
+            Sexpr::list(vec![
+                Sexpr::Str(path.clone()),
+                Sexpr::Str(content_hint_for_path(path, hint).to_string()),
+            ])
+        })
         .collect();
 
     let items = vec![
@@ -283,22 +299,29 @@ fn format_type_block(node: &IrNode) -> String {
         return format!("  {} (opaque {})", node.name, v.print());
     }
     if let Some(v) = node.field(":enum") {
-        let items = v.as_list().unwrap_or(&[]);
-        let joined = items
-            .iter()
-            .map(|s| s.print())
-            .collect::<Vec<_>>()
-            .join(" | ");
+        let joined = match v.as_list() {
+            Some(items) => items
+                .iter()
+                .map(|s| s.print())
+                .collect::<Vec<_>>()
+                .join(" | "),
+            // A non-list :enum value is off-shape; show it rather than
+            // rendering an empty variant set.
+            None => v.print(),
+        };
         return format!("  {} (enum): {}", node.name, joined);
     }
     if let Some(v) = node.field(":record") {
         let items = v.as_list().unwrap_or(&[]);
         let mut lines = vec![format!("  {} (record):", node.name)];
         for item in items {
-            if let Sexpr::List(pair) = item {
-                if pair.len() == 2 {
+            match item {
+                Sexpr::List(pair) if pair.len() == 2 => {
                     lines.push(format!("    {}: {}", pair[0].print(), pair[1].print()));
                 }
+                // Off-shape entries stay VISIBLE — a malformed field the
+                // model can see beats one that silently vanishes.
+                other => lines.push(format!("    {}", other.print())),
             }
         }
         return lines.join("\n");
@@ -307,11 +330,12 @@ fn format_type_block(node: &IrNode) -> String {
         let items = v.as_list().unwrap_or(&[]);
         let joined = items
             .iter()
-            .filter_map(|item| match item {
+            .map(|item| match item {
                 Sexpr::List(pair) if pair.len() == 2 => {
-                    Some(format!("{} {}", pair[0].print(), pair[1].print()))
+                    format!("{} {}", pair[0].print(), pair[1].print())
                 }
-                _ => None,
+                // Off-shape entries stay visible rather than vanishing.
+                other => other.print(),
             })
             .collect::<Vec<_>>()
             .join(" | ");
@@ -332,14 +356,19 @@ fn type_reference_section(ir_slice: &[IrNode]) -> String {
     format!("TYPE REFERENCE\n{}", blocks.join("\n"))
 }
 
-/// A `(tag arg)` clause's `arg`, if `c` is exactly that two-element
-/// shape headed by `tag` (used for `requires`/`ensures`).
-fn clause_arg<'a>(c: &'a Sexpr, tag: &str) -> Option<&'a Sexpr> {
+/// The printed body of a `tag`-headed clause: the single argument for
+/// the canonical `(tag arg)` shape, or the WHOLE clause printed when the
+/// arity is off-shape — a malformed clause must stay visible in the
+/// projection, never silently vanish (used for `requires`/`ensures`).
+fn clause_body(c: &Sexpr, tag: &str) -> Option<String> {
     let items = c.as_list()?;
-    if items.len() == 2 && items[0].as_sym() == Some(tag) {
-        Some(&items[1])
+    if items.first().and_then(|h| h.as_sym()) != Some(tag) {
+        return None;
+    }
+    if items.len() == 2 {
+        Some(items[1].print())
     } else {
-        None
+        Some(c.print())
     }
 }
 
@@ -351,7 +380,12 @@ fn format_fails_clause(c: &Sexpr) -> Option<String> {
     if items.is_empty() || items[0].as_sym() != Some("fails") {
         return None;
     }
-    let error_name = items.get(1)?.as_sym()?;
+    // Off-shape fails clauses (missing or non-symbol error name) project
+    // whole rather than silently vanishing from the failure list.
+    let error_name = match items.get(1).and_then(|e| e.as_sym()) {
+        Some(name) => name,
+        None => return Some(c.print()),
+    };
 
     let mut when_pred: Option<&Sexpr> = None;
     let mut preserves: Option<&Sexpr> = None;
@@ -442,8 +476,7 @@ fn format_behavior_block(node: &IrNode) -> String {
     let preconditions: Vec<String> = node
         .clauses
         .iter()
-        .filter_map(|c| clause_arg(c, "requires"))
-        .map(|p| p.print())
+        .filter_map(|c| clause_body(c, "requires"))
         .collect();
     if !preconditions.is_empty() {
         lines.push("    Preconditions:".to_string());
@@ -453,8 +486,7 @@ fn format_behavior_block(node: &IrNode) -> String {
     let postconditions: Vec<String> = node
         .clauses
         .iter()
-        .filter_map(|c| clause_arg(c, "ensures"))
-        .map(|p| p.print())
+        .filter_map(|c| clause_body(c, "ensures"))
         .collect();
     if !postconditions.is_empty() {
         lines.push("    Postconditions:".to_string());

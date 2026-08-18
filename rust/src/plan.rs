@@ -282,7 +282,13 @@ fn default_model() -> Sexpr {
 /// The first synthesis node by id (`Ir::synthesis` is already id-sorted
 /// at construction, and `nodes_of_kind` preserves partition order).
 fn first_synthesis_node(ir: &Ir) -> Option<&IrNode> {
-    ir.nodes_of_kind("synthesis").into_iter().next()
+    // Lowest id wins, independent of partition placement: all_nodes() is
+    // partition-major, so a synthesis-kind node routed into another
+    // partition (e.g. by a future kind falling into the design fallback)
+    // must not hijack selection by position.
+    ir.nodes_of_kind("synthesis")
+        .into_iter()
+        .min_by_key(|n| &n.id)
 }
 
 fn selected_target(ir: &Ir) -> Sexpr {
@@ -852,5 +858,71 @@ mod tests {
         let s = p.to_sexpr().print();
         assert!(s.starts_with("(plan "));
         assert!(s.contains("gymnast.plan/0.1"));
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_firing_tests {
+    use super::*;
+    use crate::ir::{Ir, IrNode};
+
+    fn synthetic_ir_with(extra: IrNode) -> Ir {
+        Ir::new(
+            "gymnast.ir/0.1".to_string(),
+            "m".to_string(),
+            vec![],
+            vec![extra],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
+    }
+
+    /// E403 must actually FIRE for a semantic node no plan node consumes
+    /// (the review found coverage_diagnostics could return vec![]
+    /// unconditionally with the whole suite staying green).
+    #[test]
+    fn test_e403_fires_for_unconsumed_kind() {
+        let gadget = IrNode::new(
+            "m/gadget/G".to_string(),
+            "gadget",
+            "G".to_string(),
+            vec![],
+            vec![],
+        );
+        let p = plan(&synthetic_ir_with(gadget));
+        let codes: Vec<String> = p
+            .diagnostics
+            .iter()
+            .filter_map(|d| d.assoc("code").and_then(|c| c.as_str().map(String::from)))
+            .collect();
+        assert!(
+            codes.contains(&"E403".to_string()),
+            "unconsumed kind must raise E403, got {:?}",
+            codes
+        );
+    }
+
+    /// E402 must actually FIRE for a dangling dependency.
+    #[test]
+    fn test_e402_fires_for_dangling_dependency() {
+        let node = PlanNode::new(
+            "m/plan/x".to_string(),
+            "structural",
+            "x-v1",
+            vec![],
+            vec!["m/plan/does-not-exist".to_string()],
+            Sexpr::list(vec![Sexpr::sym("lamedh")]),
+            Sexpr::sym("none"),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let diags = dependency_diagnostics(&[node]);
+        assert_eq!(diags.len(), 1);
+        let code = diags[0].assoc("code").and_then(|c| c.as_str());
+        assert_eq!(code, Some("E402"));
     }
 }

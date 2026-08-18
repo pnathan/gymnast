@@ -166,9 +166,13 @@ fn cmd_plan(src: &str, file_path: &str, _file_name: &str) {
             .unwrap_or(false)
     });
     for d in &p.diagnostics {
+        let severity = d
+            .assoc("severity")
+            .and_then(|s| s.as_sym())
+            .unwrap_or("error");
         let code = d.assoc("code").and_then(|s| s.as_str()).unwrap_or("");
         let message = d.assoc("message").and_then(|s| s.as_str()).unwrap_or("");
-        eprintln!("error[{}]: {}", code, message);
+        eprintln!("{}[{}]: {}", severity, code, message);
     }
 
     print!("{}", sexpr::canonical_serialize(&p.to_sexpr()));
@@ -215,9 +219,13 @@ fn cmd_prompts(src: &str, file_path: &str, _file_name: &str) {
             .unwrap_or(false)
     });
     for d in &p.diagnostics {
+        let severity = d
+            .assoc("severity")
+            .and_then(|s| s.as_sym())
+            .unwrap_or("error");
         let code = d.assoc("code").and_then(|s| s.as_str()).unwrap_or("");
         let message = d.assoc("message").and_then(|s| s.as_str()).unwrap_or("");
-        eprintln!("error[{}]: {}", code, message);
+        eprintln!("{}[{}]: {}", severity, code, message);
     }
 
     let packages = prompt::compile_prompts(&ir, &p);
