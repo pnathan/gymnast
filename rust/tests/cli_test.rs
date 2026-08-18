@@ -76,3 +76,55 @@ fn test_ir_artifact_carries_parse_diagnostics() {
         stdout
     );
 }
+
+#[test]
+fn test_check_and_ir_agree_on_validity() {
+    // `check` runs the same diagnostic pipeline as `ir`; a spec `ir`
+    // rejects (duplicate semantic id) must fail `check` too.
+    let src = "spec t = v 0.1 owner o exports A\n\nmode A = opaque text\ninv a = on s always p\ninv a = on s always q\n";
+    let (ir_code, _, _) = run_ir(src);
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("gymnast-cli-agree-{}.gym", std::process::id()));
+    std::fs::write(&path, src).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_gymnast-rs"))
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .expect("run check");
+    std::fs::remove_file(&path).ok();
+    let check_code = out.status.code().unwrap_or(-1);
+    assert_eq!(ir_code, 1);
+    assert_eq!(check_code, ir_code, "check and ir must agree on validity");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("E301"),
+        "check must surface the duplicate-id error"
+    );
+}
+
+#[test]
+fn test_pathological_nesting_diagnosed_not_aborted() {
+    let deep = format!(
+        "spec t = v 0.1 owner o exports A\n\nmode X = {}text\n",
+        "opt ".repeat(50_000)
+    );
+    let (code, _, stderr) = run_ir(&deep);
+    assert_eq!(code, 1, "deep nesting must exit 1, not abort");
+    assert!(stderr.contains("E105"), "nesting diagnostic expected");
+}
+
+#[test]
+fn test_large_malformed_file_parses_in_bounded_time() {
+    // Recovery and rendering are linear; 10k malformed declarations must
+    // complete promptly (this hung for ~30s before the depth/render fixes).
+    let big = format!(
+        "spec t = v 0.1 owner o exports A\n\n{}",
+        "state = 1\n".repeat(10_000)
+    );
+    let start = std::time::Instant::now();
+    let (code, _, _) = run_ir(&big);
+    assert_eq!(code, 1);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(20),
+        "recovery took {:?}",
+        start.elapsed()
+    );
+}

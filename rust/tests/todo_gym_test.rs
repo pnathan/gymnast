@@ -1,4 +1,3 @@
-use gymnast_rs::check;
 use gymnast_rs::diag::Severity;
 use gymnast_rs::parser;
 
@@ -160,12 +159,12 @@ fn test_todo_gym_check() {
 
     let file = ast.expect("parse should succeed");
 
-    // Run the checker
-    let check_diags = check::check(&file);
-
-    // Assert zero error diagnostics from checker
-    // (warnings are allowed because the fixture has a `use` declaration)
-    let check_errors: Vec<_> = check_diags
+    // Check through the full elaboration pipeline: the checker runs over
+    // the profile-EXPANDED declarations (checking the raw file would flag
+    // the profile-provided modes as unknown, by design — the closed world
+    // admits only declared or profile-provided names).
+    let (_, all_diags) = gymnast_rs::elaborate::elaborate_with_parse_diags(&file, &[]);
+    let check_errors: Vec<_> = all_diags
         .iter()
         .filter(|d| d.severity == Severity::Error)
         .collect();

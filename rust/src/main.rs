@@ -2,7 +2,6 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use gymnast_rs::check;
 use gymnast_rs::diag::{self, Severity};
 use gymnast_rs::elaborate;
 use gymnast_rs::parser;
@@ -67,12 +66,14 @@ fn cmd_parse(src: &str, file_path: &str, _file_name: &str) {
 fn cmd_check(src: &str, file_path: &str, _file_name: &str) {
     let (ast, mut diags) = parser::parse(src);
 
-    // If parsing succeeded, run the checker over the profile-EXPANDED
-    // declarations, so `check` and `ir` agree about what is unknown.
+    // Run the FULL elaboration diagnostic pipeline (profile expansion,
+    // checking over expanded declarations, duplicate semantic IDs) and
+    // discard the IR: `check` and `ir` report from one code path, so
+    // they can never disagree about whether a spec is valid.
     if let Some(file) = ast {
-        let (expanded, expansion_diags) = elaborate::expand(&file);
-        diags.extend(expansion_diags);
-        diags.extend(check::check(&expanded));
+        let parse_diags = std::mem::take(&mut diags);
+        let (_ir, all_diags) = elaborate::elaborate_with_parse_diags(&file, &parse_diags);
+        diags = all_diags;
     }
 
     // Render all diagnostics to stderr

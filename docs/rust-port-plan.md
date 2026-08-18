@@ -455,9 +455,11 @@ void`. Checks, in order:
 
 - E201 duplicate declaration name within a namespace (second site).
 - E202 unknown mode referenced from a struct field, op param, op output,
-  opaque/opt/row argument. **Downgrade to W301** when the file has at least
-  one `use` declaration (the name may be profile-provided — profile
-  resolution is not ported yet). Suggest the nearest declared name by
+  opaque/opt/row argument. **Downgrade to W301** only when the file has a
+  `use` declaration whose profile cannot be resolved (the name may be
+  provided by that unresolvable profile). Historical note: before phase
+  2 ported profile resolution, the downgrade applied to any `use`; that
+  loophole is closed. Suggest the nearest declared name by
   edit distance ≤ 2 in the message when one exists.
 - E203 `interface ... for X`: X must be a declared actor.
 - E204 behavior `on iface.op`: iface must be a declared interface, op a

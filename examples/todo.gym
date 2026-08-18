@@ -1,5 +1,6 @@
 # A vertical-slice application specification, in the draft compact surface.
-# This is examples/todo.lisp translated form-for-form; semantics are unchanged.
+# Hand-translated from examples/todo.lisp. Known deliberate deltas from the
+# Lamedh spec are catalogued in docs/ir-contract-deltas.md.
 
 spec todo = v 0.1 owner product
   exports UserId, ListId, TaskId, TodoList, Task, todo_service
@@ -83,7 +84,7 @@ behavior invite_user = on todo_service.invite (user, request) (
   reads (memberships, invitations), writes invitations,
   atomic list_membership request.list, idempotency command_key;
 
-  requires owner (pre, user, request.list);
+  requires is_owner (pre, user, request.list);
   requires other_principal_count (pre, request.list) < 256;
   ensures  post = invite_principal (pre, request);
   fails sharing_limit
@@ -108,12 +109,12 @@ synthesis prototype = target ruby / rails (
 
 acceptance production = of todo_app (
   property create_then_read =
-    generate (authenticated_editor actor, valid_task task)
+    generate (actor authenticated_editor, task valid_task)
     execute (create_task (actor, task); query_tasks (actor, task.list))
     must contains_equivalent (result, task),
 
   property viewer_cannot_mutate =
-    generate (authenticated_viewer actor, valid_task task)
+    generate (actor authenticated_viewer, task valid_task)
     execute create_task (actor, task)
     must fails_with forbidden,
 

@@ -132,9 +132,12 @@ are the only free variables, each with a checked mode. Abstract predicates
 (`may_edit_list`, `insert_task`) must be declared by a profile or the spec;
 unknown names are closed-world elaboration errors, exactly as today.
 
-## Type checking (what "typed" buys)
+## Type checking (what "typed" buys — roadmap)
 
-Elaboration keeps its current phases and adds a checking pass:
+Implemented today (v0): closed-world name resolution — every mode,
+actor, interface-op, and scope reference must resolve to a declared or
+profile-provided name. The rest of this section is the phase-3+ roadmap,
+not current behavior:
 
 - every mode reference resolves (already true, by name) **and** every use
   site is mode-correct: operation inputs/outputs, struct fields, generator

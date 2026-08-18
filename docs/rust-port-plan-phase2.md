@@ -127,8 +127,8 @@ impl IrNode {
     pub fn new(id: String, kind: &str, name: String,
                mut fields: Vec<(String, Sexpr)>, clauses: Vec<Sexpr>) -> IrNode;
     pub fn to_sexpr(&self) -> Sexpr;
-    // (ir-node (id "...") (kind type) (name Task)
-    //          (fields ((:key value) ...)) (clauses (...)) (mechanism parsed))
+    // (ir-node ((id "...") (kind type) (name Task)
+    //           (fields ((:key value) ...)) (clauses (...)) (mechanism parsed)))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -148,10 +148,10 @@ impl Ir {
     pub fn all_nodes(&self) -> Vec<&IrNode>;   // design ++ transitions ++ obligations ++ synthesis
     pub fn has_errors(&self) -> bool;          // any (severity error) diagnostic
     pub fn to_sexpr(&self) -> Sexpr;
-    // (ir (schema "gymnast.ir/0.1")
-    //     (module (name todo) (fields (...)))
-    //     (design (node ...)) (transitions (...)) (obligations (...))
-    //     (synthesis (...)) (diagnostics (...)) (fingerprint "fnv1a64:..."))
+    // (ir ((schema "gymnast.ir/0.1")
+    //      (module ((name todo) (fields (...))))
+    //      (design (...)) (transitions (...)) (obligations (...))
+    //      (synthesis (...)) (diagnostics (...)) (fingerprint "fnv1a64:...")))
 }
 ```
 
@@ -213,8 +213,11 @@ into the IR.
 `check.rs` change: add `pub fn profile_provided_names() -> &'static [&'static str]`
 returning `["Cursor", "Page", "Membership", "Invitation"]` is **not**
 done — instead the elaborator runs profile expansion BEFORE the checker,
-so the checker sees the generated mode declarations and the W301
-downgrades for these names disappear naturally. The public entry point
+so the checker sees the generated mode declarations, so profile-provided
+names resolve like any declared name. Unknown names remain hard
+closed-world errors (E202/E206); the W301 downgrade applies ONLY when
+the file contains a `use` whose profile could not be resolved (W303),
+since only then could a name plausibly be profile-provided. The public entry point
 for this is in elaborate.rs (below); `check::check` itself is unchanged.
 
 ## elaborate.rs
@@ -245,8 +248,8 @@ Pipeline inside `elaborate`:
    (lowered per the table below).
 3. **Lowering.** Every declaration (including the `use` itself and the
    generated ones) becomes one `IrNode` per the lowering table.
-   Semantic id: `<spec-name>/<kind>/<name>` (all lower-cased exactly as
-   written in source — no case folding beyond what the surface enforces).
+   Semantic id: `<spec-name>/<kind>/<name>`, each part spelled exactly as
+   written in source (no case folding).
 4. **Duplicate ids.** After lowering, a second occurrence of any id →
    `E301 duplicate-semantic-id` (error), reported once per duplicate
    occurrence, subject = the id.

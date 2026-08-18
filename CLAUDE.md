@@ -106,6 +106,27 @@ scripts/
   show-persistence-prompt.lisp prompt inspection utility
 ```
 
+## Rust port (in progress)
+
+A Rust reimplementation of the front half lives in `rust/` (std-only crate
+`gymnast-rs`), targeting a new compact Algol 68-flavored surface language
+(`.gym` files; design in `docs/surface-language.md`, example in
+`examples/todo.gym`). The `.lisp` surface and Lamedh implementation remain
+the reference until parity. Status: phases 1–2 done (lexer, parser, checker,
+profile expansion, elaborator, canonical IR + FNV-1a fingerprints); phase 3
+(planner) pending. IR shape differences from the Lamedh reference are
+catalogued in `docs/ir-contract-deltas.md`; execution plans in
+`docs/rust-port-plan.md` and `docs/rust-port-plan-phase2.md`.
+
+```sh
+# Rust crate (run from rust/)
+cargo build            # warnings are errors in CI
+cargo test             # full suite
+cargo fmt --all -- --check
+cargo run -- check ../examples/todo.gym
+cargo run -- ir ../examples/todo.gym   # canonical IR; byte-stable, CI-diffed
+```
+
 ## Compiler pipeline
 
 1. **Surface** — fexpr/vau capture of declaration operands without evaluation

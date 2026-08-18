@@ -978,3 +978,132 @@ synthesis proto = target ruby / rails (
         fields
     );
 }
+
+#[test]
+fn test_fault_lowering_keeps_inject_and_must_separate() {
+    // An unparenthesized fault body must not swallow `inject`/`must` into
+    // the :after value — that silently produced an obligation asserting
+    // nothing.
+    let ir = elaborate_source(
+        r#"
+spec m = v 0.1 owner o exports A
+
+mode A = opaque text
+
+acceptance a = of app (
+  fault durable_restart = after acknowledged_write inject restart
+    must read_your_acknowledged_write )
+"#,
+    );
+    let node = ir
+        .all_nodes()
+        .into_iter()
+        .find(|n| n.id == "m/acceptance/a")
+        .expect("acceptance node");
+    let clause = node.clauses[0].print();
+    assert_eq!(
+        clause,
+        "(fault durable_restart :after acknowledged_write :inject restart :must read_your_acknowledged_write)"
+    );
+}
+
+#[test]
+fn test_coverage_lowers_to_keyword_pairs() {
+    let ir = elaborate_source(
+        r#"
+spec m = v 0.1 owner o exports A
+
+mode A = opaque text
+
+acceptance a = of app (
+  coverage (every_operation, boundaries) )
+"#,
+    );
+    let node = ir
+        .all_nodes()
+        .into_iter()
+        .find(|n| n.id == "m/acceptance/a")
+        .expect("acceptance node");
+    assert_eq!(
+        node.clauses[0].print(),
+        "(coverage :every_operation t :boundaries t)"
+    );
+}
+
+#[test]
+fn test_singleton_plural_fields_lower_as_lists() {
+    let ir = elaborate_source(
+        r#"
+spec m = v 0.1 owner o exports A
+
+mode A = opaque text
+actor user = person (identity local)
+component c = (responsibility "r", provides svc, uses (a, b))
+flow f = user -> svc : cmd (grant session, deny token)
+"#,
+    );
+    let comp = node_fields_printed(&ir, "m/component/c");
+    assert!(comp.contains("(:provides (svc))"), "{}", comp);
+    let flow = node_fields_printed(&ir, "m/flow/f");
+    assert!(flow.contains("(:grant (session))"), "{}", flow);
+    assert!(flow.contains("(:deny (token))"), "{}", flow);
+    assert!(
+        flow.contains("(:kind command)"),
+        "flow kind normalized: {}",
+        flow
+    );
+}
+
+#[test]
+fn test_calls_inside_groups_lower_as_calls() {
+    let ir = elaborate_source(
+        r#"
+spec m = v 0.1 owner o exports A
+
+mode A = opaque text
+
+acceptance a = of app (
+  property p =
+    generate (actor gen_actor)
+    execute (create_task (actor, task); query_tasks (actor, task.list))
+    must ok )
+"#,
+    );
+    let node = ir
+        .all_nodes()
+        .into_iter()
+        .find(|n| n.id == "m/acceptance/a")
+        .expect("acceptance node");
+    let clause = node.clauses[0].print();
+    assert!(
+        clause.contains(":execute ((create_task actor task) (query_tasks actor task/list))"),
+        "calls in groups must lower as flat calls: {}",
+        clause
+    );
+}
+
+#[test]
+fn test_closed_world_typo_is_an_error_even_with_profile() {
+    // A resolvable profile's names are in the table after expansion, so a
+    // typo'd mode reference stays a hard E202 — the closed world holds.
+    let (ast, parse_diags) = gymnast_rs::parser::parse(
+        r#"
+spec m = v 0.1 owner o exports A
+
+use oddities/profiles/todo_standard @ 1.0 (sharing_limit 1, identity_provider g)
+
+mode ListId = opaque text
+mode UserId = opaque text
+mode Role = enum (r)
+mode Version = opaque int
+mode A = struct (UserIdd owner)
+"#,
+    );
+    assert!(parse_diags.is_empty());
+    let ir = elaborate::elaborate(&ast.unwrap());
+    assert!(
+        ir.has_errors(),
+        "typo'd mode must be an error, not a warning: {:?}",
+        ir.diagnostics.iter().map(|d| d.print()).collect::<Vec<_>>()
+    );
+}

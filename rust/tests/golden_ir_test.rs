@@ -32,10 +32,10 @@ fn test_todo_ir_deterministic() {
 fn test_todo_ir_no_errors() {
     let src = fs::read_to_string("../examples/todo.gym").expect("Cannot read ../examples/todo.gym");
 
-    let (ast, _diags) = parser::parse(&src);
+    let (ast, parse_diags) = parser::parse(&src);
     let file = ast.expect("Failed to parse todo.gym");
 
-    let ir = elaborate::elaborate(&file);
+    let (ir, _) = elaborate::elaborate_with_parse_diags(&file, &parse_diags);
 
     // Check: no error diagnostics
     assert!(!ir.has_errors(), "todo.gym should not have errors");
@@ -75,10 +75,10 @@ fn test_todo_ir_no_errors() {
 fn test_todo_ir_structure() {
     let src = fs::read_to_string("../examples/todo.gym").expect("Cannot read ../examples/todo.gym");
 
-    let (ast, _diags) = parser::parse(&src);
+    let (ast, parse_diags) = parser::parse(&src);
     let file = ast.expect("Failed to parse todo.gym");
 
-    let ir = elaborate::elaborate(&file);
+    let (ir, _) = elaborate::elaborate_with_parse_diags(&file, &parse_diags);
 
     // Check structural counts
     // Design: 1 import + 1 application + 1 actor + 14 type (10 declared + 4 profile-generated)
@@ -172,10 +172,10 @@ fn test_todo_ir_structure() {
 fn test_todo_ir_matches_golden_fixture() {
     let src = fs::read_to_string("../examples/todo.gym").expect("Cannot read ../examples/todo.gym");
 
-    let (ast, _diags) = parser::parse(&src);
+    let (ast, parse_diags) = parser::parse(&src);
     let file = ast.expect("Failed to parse todo.gym");
 
-    let ir = elaborate::elaborate(&file);
+    let (ir, _) = elaborate::elaborate_with_parse_diags(&file, &parse_diags);
 
     let serialized = sexpr::canonical_serialize(&ir.to_sexpr());
 

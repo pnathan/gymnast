@@ -23,7 +23,12 @@ struct SymbolTable {
     components: HashMap<String, Ident>,
     behaviors: HashMap<String, Ident>,
     flows: HashMap<String, Ident>,
-    has_use_decl: bool,
+    /// True only when the file contains a `use` whose profile could not
+    /// be resolved: only then can an unknown name plausibly be
+    /// profile-provided. A resolvable profile's names are already in the
+    /// table (checking runs post-expansion), so unknown names stay hard
+    /// closed-world errors.
+    has_unresolved_use: bool,
 }
 
 impl SymbolTable {
@@ -47,7 +52,7 @@ impl SymbolTable {
             components: HashMap::new(),
             behaviors: HashMap::new(),
             flows: HashMap::new(),
-            has_use_decl: false,
+            has_unresolved_use: false,
         }
     }
 }
@@ -76,8 +81,16 @@ impl Checker {
         // Also check capitalization (W302)
         for decl in &file.decls {
             match decl {
-                Decl::Use(_) => {
-                    self.symtab.has_use_decl = true;
+                Decl::Use(u) => {
+                    let profile_name = u
+                        .path
+                        .iter()
+                        .map(|i| i.text.clone())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    if crate::profile::lookup(&profile_name, &u.version).is_none() {
+                        self.symtab.has_unresolved_use = true;
+                    }
                 }
                 Decl::Mode(m) => {
                     self.check_capitalization_mode(&m.name);
@@ -324,13 +337,13 @@ impl Checker {
     }
 
     fn check_unknown_mode(&mut self, name: &Ident) {
-        let severity = if self.symtab.has_use_decl {
+        let severity = if self.symtab.has_unresolved_use {
             Severity::Warning
         } else {
             Severity::Error
         };
 
-        let code = if self.symtab.has_use_decl {
+        let code = if self.symtab.has_unresolved_use {
             "W301"
         } else {
             "E202"
@@ -478,13 +491,13 @@ impl Checker {
                 || self.symtab.flows.contains_key(&export.text);
 
             if !is_declared {
-                let severity = if self.symtab.has_use_decl {
+                let severity = if self.symtab.has_unresolved_use {
                     Severity::Warning
                 } else {
                     Severity::Error
                 };
 
-                let code = if self.symtab.has_use_decl {
+                let code = if self.symtab.has_unresolved_use {
                     "W301"
                 } else {
                     "E206"

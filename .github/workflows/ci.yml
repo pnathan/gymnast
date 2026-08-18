@@ -42,6 +42,12 @@ jobs:
         run: cargo test
       - name: Check todo.gym fixture
         run: cargo run -- check ../examples/todo.gym
+      - name: Reject a known-bad spec
+        run: |
+          printf 'spec t = v 0.1 owner o exports A\n\nmode A = struct (Missing x)\n' > /tmp/bad.gym
+          if cargo run -- check /tmp/bad.gym; then
+            echo "check accepted a spec with an unknown mode" >&2; exit 1
+          fi
       - name: Reproducible IR
         run: |
           cargo run -- ir ../examples/todo.gym > /tmp/ir-one.sexpr

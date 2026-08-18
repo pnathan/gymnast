@@ -15,7 +15,18 @@ pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     diags: Vec<Diagnostic>,
+    /// Paren depth at `pos`, maintained incrementally by advance() so
+    /// error recovery is O(1) per query instead of rescanning the prefix
+    /// (which made recovery quadratic on large malformed files).
+    depth: i32,
+    /// Recursion depth of the descent, bounded so pathological nesting
+    /// produces a diagnostic instead of a stack overflow.
+    recursion: usize,
 }
+
+/// Maximum nesting depth of any recursive production. Generous for a
+/// spec language; past it the parser diagnoses instead of overflowing.
+const MAX_RECURSION: usize = 256;
 
 impl Parser {
     /// Create a new parser.
@@ -40,7 +51,31 @@ impl Parser {
             tokens,
             pos: 0,
             diags: Vec::new(),
+            depth: 0,
+            recursion: 0,
         }
+    }
+
+    /// Bump the recursion guard; on breach, diagnose once and refuse.
+    fn enter_recursion(&mut self) -> bool {
+        self.recursion += 1;
+        if self.recursion > MAX_RECURSION {
+            if self.recursion == MAX_RECURSION + 1 {
+                self.diags.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "E105",
+                    span: self.peek().span,
+                    message: "nesting too deep".to_string(),
+                });
+            }
+            self.recursion -= 1;
+            return false;
+        }
+        true
+    }
+
+    fn exit_recursion(&mut self) {
+        self.recursion = self.recursion.saturating_sub(1);
     }
 
     /// Get current token without advancing.
@@ -62,9 +97,25 @@ impl Parser {
     fn advance(&mut self) -> Token {
         let token = self.peek().clone();
         if self.pos < self.tokens.len() {
+            match token.kind {
+                TokenKind::LParen => self.depth += 1,
+                TokenKind::RParen => self.depth -= 1,
+                _ => {}
+            }
             self.pos += 1;
         }
         token
+    }
+
+    /// Snapshot / restore for bounded lookahead: position AND the
+    /// incrementally tracked paren depth must move together.
+    fn save(&self) -> (usize, i32) {
+        (self.pos, self.depth)
+    }
+
+    fn restore(&mut self, saved: (usize, i32)) {
+        self.pos = saved.0;
+        self.depth = saved.1;
     }
 
     /// Compare two TokenKind patterns.
@@ -123,17 +174,9 @@ impl Parser {
         }
     }
 
-    /// Get paren depth of current position by looking backwards.
+    /// Paren depth at the current position (incrementally maintained).
     fn paren_depth(&self) -> i32 {
-        let mut depth = 0;
-        for i in 0..self.pos {
-            match &self.tokens[i].kind {
-                TokenKind::LParen => depth += 1,
-                TokenKind::RParen => depth -= 1,
-                _ => {}
-            }
-        }
-        depth
+        self.depth
     }
 
     /// Expect a specific token or emit an error.
@@ -565,6 +608,15 @@ impl Parser {
 
     /// Parse mode expression.
     pub fn parse_mode_expr(&mut self) -> Option<ModeExpr> {
+        if !self.enter_recursion() {
+            return None;
+        }
+        let result = self.parse_mode_expr_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_mode_expr_inner(&mut self) -> Option<ModeExpr> {
         if self.check_ident("opaque") {
             self.advance();
             let inner = self.parse_mode_expr()?;
@@ -1503,7 +1555,15 @@ impl Parser {
                 }
                 items
             };
-            Some(AcceptanceBlock::Fault { name, body })
+            // The assertion is what makes the fault an obligation; parse it
+            // explicitly so it can never be swallowed into a field value.
+            let must = if self.check_ident("must") {
+                self.advance();
+                self.parse_pred()
+            } else {
+                None
+            };
+            Some(AcceptanceBlock::Fault { name, body, must })
         } else if self.check_ident("coverage") {
             self.advance();
             self.expect(TokenKind::LParen, "`(`")?;
@@ -1548,7 +1608,7 @@ impl Parser {
             PackValue::Unit
         } else if let TokenKind::Ident(_) = self.peek_kind() {
             // Lookahead for a binding: `given owner = authenticated_owner`.
-            let saved = self.pos;
+            let saved = self.save();
             let bound = self.parse_ident()?;
             if self.peek_kind() == &TokenKind::Eq {
                 self.advance();
@@ -1559,7 +1619,7 @@ impl Parser {
                     value: inner,
                 }])
             } else {
-                self.pos = saved;
+                self.restore(saved);
                 self.parse_pack_value().unwrap_or(PackValue::Unit)
             }
         } else {
@@ -1629,6 +1689,29 @@ impl Parser {
         })
     }
 
+    /// Words that begin a new clause inside acceptance/behavior block
+    /// bodies. Multi-word value parsing must stop before them, or an
+    /// unparenthesized body like `after ack inject restart must p` swallows
+    /// the following clauses into one value (silent data loss).
+    fn is_clause_stop_word(name: &str) -> bool {
+        matches!(
+            name,
+            "must"
+                | "inject"
+                | "after"
+                | "generate"
+                | "execute"
+                | "given"
+                | "when"
+                | "then"
+                | "requires"
+                | "ensures"
+                | "returns"
+                | "fails"
+                | "emits"
+        )
+    }
+
     /// Parse the contents of an already-consumed `(` up to and including
     /// the closing `)`. Entries are comma/semicolon-separated. The group is
     /// a Pack when every entry is ident-headed AND at least one entry
@@ -1643,16 +1726,19 @@ impl Parser {
         let mut entries: Vec<Entry> = Vec::new();
         while self.peek_kind() != &TokenKind::RParen && self.peek_kind() != &TokenKind::Eof {
             let iter_start = self.pos;
-            // An ident followed by `.` is a path VALUE (`task.list`), never
-            // a pack-item key; everything else ident-headed parses as a
-            // key/value item (with a Unit value when bare).
+            // An ident followed by `.` is a path VALUE (`task.list`) and an
+            // ident followed by `(` is a call VALUE (`f (x, y)`) — never a
+            // pack-item key; everything else ident-headed parses as a
+            // key/value item (with a Unit value when bare). Without the call
+            // rule, `f (x, y)` inside a group would lower as a key/value
+            // pair, indistinguishable from `(class nano)`.
             let ident_headed = matches!(self.peek_kind(), TokenKind::Ident(_));
-            let is_path = ident_headed
+            let is_value_head = ident_headed
                 && matches!(
                     self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                    Some(TokenKind::Dot)
+                    Some(TokenKind::Dot) | Some(TokenKind::LParen)
                 );
-            if ident_headed && !is_path {
+            if ident_headed && !is_value_head {
                 if let Some(item) = self.parse_pack_item() {
                     entries.push(Entry::Item(item));
                 }
@@ -1707,6 +1793,15 @@ impl Parser {
 
     /// Parse a pack value.
     pub fn parse_pack_value(&mut self) -> Option<PackValue> {
+        if !self.enter_recursion() {
+            return None;
+        }
+        let result = self.parse_pack_value_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_pack_value_inner(&mut self) -> Option<PackValue> {
         match self.peek_kind() {
             TokenKind::Int(val) => {
                 let int_val = *val;
@@ -1762,10 +1857,12 @@ impl Parser {
                     }
 
                     // Check if there are more idents after the path (multi-word)
-                    if let TokenKind::Ident(_) = self.peek_kind() {
+                    if matches!(self.peek_kind(), TokenKind::Ident(n) if !Self::is_clause_stop_word(n))
+                    {
                         let mut values = vec![PackValue::Path(path)];
                         loop {
-                            if let TokenKind::Ident(_) = self.peek_kind() {
+                            if matches!(self.peek_kind(), TokenKind::Ident(n) if !Self::is_clause_stop_word(n))
+                            {
                                 let next_ident = self.parse_ident()?;
                                 if self.peek_kind() == &TokenKind::Dot {
                                     // This is another path
@@ -1787,11 +1884,13 @@ impl Parser {
                     } else {
                         Some(PackValue::Path(path))
                     }
-                } else if let TokenKind::Ident(_) = self.peek_kind() {
+                } else if matches!(self.peek_kind(), TokenKind::Ident(n) if !Self::is_clause_stop_word(n))
+                {
                     // Multi-word value: first ident is Word, rest as list
                     let mut values = vec![PackValue::Word(first_ident)];
                     loop {
-                        if let TokenKind::Ident(_) = self.peek_kind() {
+                        if matches!(self.peek_kind(), TokenKind::Ident(n) if !Self::is_clause_stop_word(n))
+                        {
                             let next_ident = self.parse_ident()?;
                             if self.peek_kind() == &TokenKind::Dot {
                                 // This is a path
@@ -1830,6 +1929,15 @@ impl Parser {
 
     /// Parse predicate with or precedence.
     pub fn parse_pred(&mut self) -> Option<Pred> {
+        if !self.enter_recursion() {
+            return None;
+        }
+        let result = self.parse_pred_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_pred_inner(&mut self) -> Option<Pred> {
         self.parse_pred_or()
     }
 
@@ -1861,6 +1969,15 @@ impl Parser {
 
     /// Parse predicate not.
     pub fn parse_pred_not(&mut self) -> Option<Pred> {
+        if !self.enter_recursion() {
+            return None;
+        }
+        let result = self.parse_pred_not_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_pred_not_inner(&mut self) -> Option<Pred> {
         if self.check_ident("not") {
             self.advance();
             let pred = self.parse_pred_not()?;
@@ -1986,6 +2103,15 @@ impl Parser {
 
     /// Parse expression.
     pub fn parse_expr(&mut self) -> Option<Expr> {
+        if !self.enter_recursion() {
+            return None;
+        }
+        let result = self.parse_expr_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_expr_inner(&mut self) -> Option<Expr> {
         match self.peek_kind() {
             TokenKind::Int(val) => {
                 let int_val = *val;

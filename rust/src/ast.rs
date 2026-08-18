@@ -368,6 +368,8 @@ pub enum AcceptanceBlock {
         name: Ident,
         /// Test body.
         body: Pack,
+        /// Fault assertion (`must <pred>`), the obligation's teeth.
+        must: Option<Pred>,
     },
     /// Coverage specification.
     Coverage(Vec<Ident>),

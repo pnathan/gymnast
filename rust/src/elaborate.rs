@@ -13,21 +13,6 @@ pub fn elaborate(file: &File) -> Ir {
     elaborate_with_parse_diags(file, &[]).0
 }
 
-/// Expand profiles only: the post-expansion file plus expansion
-/// diagnostics (E302/W303). Lets the `check` CLI subcommand see the same
-/// declarations the elaborator checks, so the two agree.
-pub fn expand(file: &File) -> (File, Vec<Diagnostic>) {
-    let mut elaborator = Elaborator::new(&file.spec.name.text);
-    let expanded = elaborator.expand_profiles(&file.decls);
-    (
-        File {
-            spec: file.spec.clone(),
-            decls: expanded.into_iter().map(|(d, _)| d).collect(),
-        },
-        elaborator.elab_diags,
-    )
-}
-
 /// Elaborate with the parser's diagnostics folded in, so the serialized
 /// IR is self-describing even for a spec that only partially parsed.
 /// Returns the IR and the full typed diagnostic list (parse, then check,
@@ -407,10 +392,17 @@ impl Elaborator {
     }
 
     fn lower_flow(&self, flow: &FlowDecl) -> Option<IrNode> {
+        // Normalize the flow kind to the same vocabulary interface op
+        // clauses use, so one concept has one spelling in the IR.
+        let kind = match flow.kind.text.as_str() {
+            "cmd" => "command",
+            "qry" => "query",
+            other => other,
+        };
         let mut fields = vec![
             (":from".to_string(), Sexpr::sym(&flow.from.text)),
             (":to".to_string(), Sexpr::sym(&flow.to.text)),
-            (":kind".to_string(), Sexpr::sym(&flow.kind.text)),
+            (":kind".to_string(), Sexpr::sym(kind)),
         ];
         fields.extend(pack_to_fields(&flow.attrs));
         let id = format!("{}/flow/{}", self.module_name, flow.name.text);
@@ -603,18 +595,25 @@ impl Elaborator {
                 items.push(pred_to_sexpr(must));
                 Sexpr::list(items)
             }
-            AcceptanceBlock::Fault { name, body } => {
+            AcceptanceBlock::Fault { name, body, must } => {
                 let mut items = vec![Sexpr::sym("fault"), Sexpr::sym(&name.text)];
                 for item in body {
                     items.push(Sexpr::sym(&format!(":{}", item.key.text)));
                     items.push(pack_value_to_sexpr(&item.value));
                 }
+                if let Some(pred) = must {
+                    items.push(Sexpr::sym(":must"));
+                    items.push(pred_to_sexpr(pred));
+                }
                 Sexpr::list(items)
             }
             AcceptanceBlock::Coverage(names) => {
+                // Keyword pairs, so a port of verify.lisp's
+                // gymnast-keyword-value reads them unchanged.
                 let mut items = vec![Sexpr::sym("coverage")];
                 for name in names {
-                    items.push(Sexpr::sym(&name.text));
+                    items.push(Sexpr::sym(&format!(":{}", name.text)));
+                    items.push(Sexpr::sym("t"));
                 }
                 Sexpr::list(items)
             }
@@ -632,11 +631,24 @@ impl Elaborator {
 
 // Helper functions
 
+/// Keys whose values are lists in the Lamedh IR contract. A single
+/// element still lowers as a one-element list, so downstream iteration
+/// never has to special-case arity 1.
+fn is_plural_field(key: &str) -> bool {
+    matches!(
+        key,
+        "provides" | "uses" | "grant" | "deny" | "modules" | "reads" | "writes"
+    )
+}
+
 fn pack_to_fields(pack: &Pack) -> Vec<(String, Sexpr)> {
     let mut fields = Vec::new();
     for item in pack {
         let key = format!(":{}", item.key.text);
-        let value = pack_value_to_sexpr(&item.value);
+        let mut value = pack_value_to_sexpr(&item.value);
+        if is_plural_field(&item.key.text) && !matches!(value, Sexpr::List(_)) {
+            value = Sexpr::list(vec![value]);
+        }
         fields.push((key, value));
     }
     fields
