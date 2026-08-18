@@ -13,6 +13,8 @@
       ((equal kind 'type) '(:opaque :record :enum :variant))
       ((equal kind 'component) '(:responsibility :provides :uses))
       ((equal kind 'interface) nil)
+      ((equal kind 'port)
+        '(:direction :protocol :content-type :schema :version :endpoint))
       ((equal kind 'state)
         '(:of :owner :durability :initial :aggregate :versioned
           :partitioned-by :consistency))
@@ -30,6 +32,7 @@
 (defun gymnast-allowed-clauses (kind)
   (cond
     ((equal kind 'interface) '(operation command query event))
+    ((equal kind 'port) '(operation))
     ((equal kind 'behavior) '(requires ensures returns fails emits))
     ((equal kind 'acceptance)
       '(model property scenario concurrency fault coverage execution))
@@ -39,6 +42,7 @@
   (cond
     ((equal kind 'actor) '(:kind))
     ((equal kind 'component) '(:responsibility))
+    ((equal kind 'port) '(:direction :protocol))
     ((equal kind 'state) '(:of :owner :durability))
     ((equal kind 'behavior) '(:on))
     ((equal kind 'constraint) '(:class))
@@ -262,7 +266,7 @@
             (list 'design
               (gymnast-partition-nodes
                 nodes '(import application actor type component
-                  interface state flow)))
+                  interface port state flow)))
             (list 'transitions
               (gymnast-partition-nodes nodes '(behavior)))
             (list 'obligations

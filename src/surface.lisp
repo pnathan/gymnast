@@ -5,7 +5,7 @@
 ;;; declarations in the caller's lexical environment.
 
 (def $gymnast-kernel-heads
-  '(import application actor type component interface state flow behavior
+  '(import application actor type component interface port state flow behavior
     invariant constraint synthesis acceptance))
 
 (defun gymnast-trusted-surface-head-p (head)
@@ -57,6 +57,7 @@
 (defexpr type (operands) (gymnast-surface-leaf 'type operands 'fexpr))
 (defexpr component (operands) (gymnast-surface-leaf 'component operands 'fexpr))
 (defexpr interface (operands) (gymnast-surface-leaf 'interface operands 'fexpr))
+(defexpr port (operands) (gymnast-surface-leaf 'port operands 'fexpr))
 (defexpr state (operands) (gymnast-surface-leaf 'state operands 'fexpr))
 (defexpr flow (operands) (gymnast-surface-leaf 'flow operands 'fexpr))
 (defexpr behavior (operands) (gymnast-surface-leaf 'behavior operands 'fexpr))

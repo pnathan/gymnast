@@ -56,7 +56,7 @@ scripts/benchmark.sh
 src/
   gymnast.lisp       load unit; includes all 16 modules, defines gymnast-compile
   core.lisp          data constructors, helpers, FNV-1a fingerprinting, IR/plan node types
-  surface.lisp       fexprs, vau, defspec macro, use-profile macro
+  surface.lisp       fexprs, vau, defspec macro, use-profile macro, port declaration
   profile.lisp       versioned semantic profiles: registration, resolution, parameterization
   elaborate.lisp     surface-to-IR elaboration with closed-world diagnostics
   plan.lisp          deterministic lowering from IR to 8-node typed synthesis DAG
@@ -73,7 +73,7 @@ src/
   serialize.lisp     canonical serialization contract and trust-boundary validation
   cli.lisp           CLI entrypoint: check, ir, plan, prompts, compile subcommands
 tests/
-  compiler.lisp      103 tests: front-half pipeline, platform, transitions, verification, multi-target
+  compiler.lisp      111 tests: front-half pipeline, platform, transitions, verification, ports, multi-target
   core-types.lisp    48 tests: core data constructors and helpers
   transition-types.lisp  4 tests: transition record types
   recipe-types.lisp  4 tests: recipe record types
@@ -166,10 +166,12 @@ scripts/
   post-transition states.
 - Cache keys are derived from node contract fingerprint, IR-slice fingerprint,
   and dependency fingerprints for reproducible invalidation.
+- Port declarations characterize external boundaries (provides/requires) without
+  importing foreign closed worlds; interop is by contract, not by inclusion.
 
 ## Issue roadmap (dependency order)
 
-Issues #1–#10 are closed. Issues #12, #17, #23 remain open.
+Issues #1–#10 are closed. Issues #12, #37 remain open.
 
 | # | Title | Status |
 |---|-------|--------|
@@ -184,19 +186,22 @@ Issues #1–#10 are closed. Issues #12, #17, #23 remain open.
 | 9 | Assembly and promotion evidence bundles | Closed |
 | 10 | Adequacy campaign (mutation/concurrency/fault) | Closed |
 | 12 | North star architecture document | Open |
-| 17 | Update CLAUDE.md to match current codebase | Open |
-| 23 | Benchmark for merges | Open |
+| 36 | Unknown profile imports → hard error | Closed |
+| 37 | Fixed 8-node plan template regardless of spec complexity | Open |
+| 38 | Component port declarations for external boundaries | Closed |
 
 ## What is built
 
-The complete compiler pipeline from surface through assembly, with 178 tests
+The complete compiler pipeline from surface through assembly, with 192 tests
 across 7 test files and 10 example specifications:
 
 - Surface capture and profile resolution
 - Closed-world elaboration with semantic IDs and fingerprinting
 - Deterministic 8-node synthesis planning with coverage checks
 - Prompt compilation with structured projections (capabilities, state model,
-  type reference, behavioral reference)
+  type reference, port boundaries, behavioral reference)
+- Component port declarations for external interface boundaries
+  (REST, gRPC, GraphQL, message queues — provides/requires contracts)
 - Candidate validation firewall
 - Executable transition calculus with bounded trace execution
 - Characterized Ruby platform kit with adapters and test doubles

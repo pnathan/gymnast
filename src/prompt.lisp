@@ -192,6 +192,48 @@
           (mapcar #'gymnast-format-type-node type-nodes) nl)
         nl nl))))
 
+;;; Structured projection: port reference from port IR nodes.
+
+(defun gymnast-format-port-node (node)
+  (let* ((nl (code-char 10))
+      (name (gymnast-ir-node-field node 'name))
+      (fields (gymnast-ir-node-field node 'fields))
+      (direction (gymnast-assoc-value ':direction fields))
+      (protocol (gymnast-assoc-value ':protocol fields))
+      (content-type (gymnast-assoc-value ':content-type fields))
+      (schema (gymnast-assoc-value ':schema fields))
+      (endpoint (gymnast-assoc-value ':endpoint fields))
+      (clauses (gymnast-ir-node-field node 'clauses))
+      (operations (filter (lambda (c) (equal (car c) 'operation)) clauses)))
+    (concat "  " (gymnast-symbol-string name)
+      " [" (gymnast-symbol-string direction) "]:" nl
+      "    Protocol: " (gymnast-symbol-string protocol)
+      (if content-type
+        (concat " (" (gymnast-symbol-string content-type) ")") "")
+      nl
+      (if schema
+        (concat "    Schema: " (gymnast-symbol-string schema) nl) "")
+      (if endpoint
+        (concat "    Endpoint: " (prin1-to-string endpoint) nl) "")
+      (if operations
+        (concat "    Operations:" nl
+          (gymnast-join-strings
+            (mapcar
+              (lambda (op)
+                (concat "      " (prin1-to-string (cdr op))))
+              operations)
+            nl) nl)
+        ""))))
+
+(defun gymnast-project-port-reference (ir-slice)
+  (let* ((nl (code-char 10))
+      (port-nodes (gymnast-nodes-of-kind ir-slice 'port)))
+    (if (null port-nodes) ""
+      (concat "PORT BOUNDARIES" nl
+        (gymnast-join-strings
+          (mapcar #'gymnast-format-port-node port-nodes)
+          nl) nl nl))))
+
 ;;; Structured projection: behavioral reference from behavior IR nodes.
 
 (defun gymnast-format-failure-clause (f)
@@ -357,6 +399,7 @@
       (gymnast-project-capability-contracts node)
       (gymnast-project-state-model ir-slice)
       (gymnast-project-type-reference ir-slice)
+      (gymnast-project-port-reference ir-slice)
       (gymnast-project-behavioral-reference ir-slice)
       "OBLIGATIONS" nl
       (gymnast-join-strings
