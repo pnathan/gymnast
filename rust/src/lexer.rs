@@ -265,6 +265,17 @@ impl<'a> Lexer<'a> {
                 }
                 _ => {
                     self.pos += 1;
+                    // For a multi-byte UTF-8 character, consume its
+                    // continuation bytes too: one diagnostic per character,
+                    // with a span that stays on char boundaries.
+                    while self.pos < self.bytes.len() && (self.bytes[self.pos] & 0xC0) == 0x80 {
+                        self.pos += 1;
+                    }
+                    let display = String::from_utf8_lossy(&self.bytes[start..self.pos])
+                        .chars()
+                        .next()
+                        .map(|c| c.escape_default().to_string())
+                        .unwrap_or_default();
                     self.diagnostics.push(Diagnostic {
                         severity: Severity::Error,
                         code: "E001",
@@ -272,7 +283,7 @@ impl<'a> Lexer<'a> {
                             start,
                             end: self.pos,
                         },
-                        message: format!("unexpected token `{}`", ch.escape_default().to_string()),
+                        message: format!("unexpected token `{}`", display),
                     });
                 }
             }
@@ -305,7 +316,11 @@ impl<'a> Lexer<'a> {
 
     fn lex_string(&mut self, start: usize) {
         self.pos += 1;
-        let mut result = String::new();
+        // Collect raw bytes and decode once at the end: pushing each byte as
+        // a char would corrupt multi-byte UTF-8 sequences into mojibake. The
+        // delimiters (`"`, `\`) are ASCII, so slicing at them keeps the
+        // collected bytes valid UTF-8 whenever the input is.
+        let mut result: Vec<u8> = Vec::new();
 
         loop {
             if self.pos >= self.bytes.len() {
@@ -321,19 +336,19 @@ impl<'a> Lexer<'a> {
                 break;
             }
 
-            let ch = self.bytes[self.pos] as char;
+            let byte = self.bytes[self.pos];
 
-            if ch == '"' {
+            if byte == b'"' {
                 self.pos += 1;
                 self.tokens.push(Token {
-                    kind: TokenKind::Str(result),
+                    kind: TokenKind::Str(String::from_utf8_lossy(&result).into_owned()),
                     span: Span {
                         start,
                         end: self.pos,
                     },
                 });
                 break;
-            } else if ch == '\\' {
+            } else if byte == b'\\' {
                 self.pos += 1;
                 if self.pos >= self.bytes.len() {
                     self.diagnostics.push(Diagnostic {
@@ -348,18 +363,18 @@ impl<'a> Lexer<'a> {
                     break;
                 }
 
-                let escaped = self.bytes[self.pos] as char;
+                let escaped = self.bytes[self.pos];
                 match escaped {
-                    '"' => result.push('"'),
-                    '\\' => result.push('\\'),
+                    b'"' => result.push(b'"'),
+                    b'\\' => result.push(b'\\'),
                     _ => {
-                        result.push('\\');
+                        result.push(b'\\');
                         result.push(escaped);
                     }
                 }
                 self.pos += 1;
             } else {
-                result.push(ch);
+                result.push(byte);
                 self.pos += 1;
             }
         }
@@ -405,9 +420,11 @@ impl<'a> Lexer<'a> {
     fn lex_ident(&mut self, start: usize) {
         let mut ident = String::new();
 
+        // Identifiers are ASCII-only by the grammar; a non-ASCII byte would
+        // otherwise be misread as a Latin-1 char and corrupt the name.
         while self.pos < self.bytes.len() {
             let ch = self.bytes[self.pos] as char;
-            if ch.is_alphanumeric() || ch == '_' {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
                 ident.push(ch);
                 self.pos += 1;
             } else {

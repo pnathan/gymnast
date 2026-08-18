@@ -12,7 +12,23 @@ pub struct Parser {
 
 impl Parser {
     /// Create a new parser.
-    pub fn new(tokens: Vec<Token>) -> Self {
+    pub fn new(mut tokens: Vec<Token>) -> Self {
+        // Guarantee an EOF sentinel so peek() is total even on an empty
+        // or truncated token stream.
+        let needs_eof = !matches!(
+            tokens.last(),
+            Some(Token {
+                kind: TokenKind::Eof,
+                ..
+            })
+        );
+        if needs_eof {
+            let end = tokens.last().map(|t| t.span.end).unwrap_or(0);
+            tokens.push(Token {
+                kind: TokenKind::Eof,
+                span: Span { start: end, end },
+            });
+        }
         Parser {
             tokens,
             pos: 0,
@@ -25,7 +41,7 @@ impl Parser {
         if self.pos < self.tokens.len() {
             &self.tokens[self.pos]
         } else {
-            // Return a synthetic EOF at the end
+            // Return the EOF sentinel (guaranteed present by new()).
             &self.tokens[self.tokens.len() - 1]
         }
     }
@@ -52,42 +68,46 @@ impl Parser {
         }
     }
 
-    /// Skip to next top-level declaration keyword at paren depth 0 for error recovery.
-    fn skip_to_next_decl(&mut self, paren_depth: i32) {
+    /// True if `name` is a top-level declaration keyword.
+    fn is_decl_keyword(name: &str) -> bool {
+        matches!(
+            name,
+            "use"
+                | "application"
+                | "actor"
+                | "mode"
+                | "component"
+                | "interface"
+                | "state"
+                | "flow"
+                | "behavior"
+                | "inv"
+                | "constraint"
+                | "synthesis"
+                | "acceptance"
+        )
+    }
+
+    /// Skip to the next top-level declaration keyword for error recovery.
+    /// `start_depth` is the paren depth at the current position; the walk
+    /// tracks depth mutably so recovery entered at any nesting level still
+    /// resurfaces to depth 0 and stops at the next declaration.
+    fn skip_to_next_decl(&mut self, start_depth: i32) {
+        let mut depth = start_depth;
         while self.pos < self.tokens.len() && self.peek_kind() != &TokenKind::Eof {
             match self.peek_kind() {
                 TokenKind::LParen => {
+                    depth += 1;
                     self.advance();
-                    if paren_depth == 0 {
-                        self.skip_to_next_decl(1);
-                    }
                 }
                 TokenKind::RParen => {
-                    self.advance();
-                    if paren_depth == 1 {
-                        return;
+                    if depth > 0 {
+                        depth -= 1;
                     }
+                    self.advance();
                 }
-                TokenKind::Ident(name) if paren_depth == 0 => {
-                    if matches!(
-                        name.as_str(),
-                        "use"
-                            | "application"
-                            | "actor"
-                            | "mode"
-                            | "component"
-                            | "interface"
-                            | "state"
-                            | "flow"
-                            | "behavior"
-                            | "inv"
-                            | "constraint"
-                            | "synthesis"
-                            | "acceptance"
-                    ) {
-                        return;
-                    }
-                    self.advance();
+                TokenKind::Ident(name) if depth <= 0 && Self::is_decl_keyword(name) => {
+                    return;
                 }
                 _ => {
                     self.advance();
@@ -179,12 +199,18 @@ impl Parser {
         let mut decls = Vec::new();
 
         while self.peek_kind() != &TokenKind::Eof {
+            let iter_start = self.pos;
             match self.parse_decl() {
                 Some(decl) => decls.push(decl),
                 None => {
                     let paren_depth = self.paren_depth();
                     self.skip_to_next_decl(paren_depth);
                 }
+            }
+            // Progress invariant: every iteration must consume at least one
+            // token, or the loop would retry the same token forever.
+            if self.pos == iter_start {
+                self.advance();
             }
         }
 
@@ -274,11 +300,27 @@ impl Parser {
         })
     }
 
+    /// Reject version components whose source spelling has leading zeros:
+    /// `1.05` would otherwise re-serialize as "1.5" and collide with it.
+    fn check_version_component(&mut self, value: i64, token: &Token) {
+        let digits = value.to_string().len();
+        let source_len = token.span.end - token.span.start;
+        if source_len != digits {
+            self.diags.push(Diagnostic {
+                severity: Severity::Error,
+                code: "E103",
+                span: token.span,
+                message: "version component must not have leading zeros".to_string(),
+            });
+        }
+    }
+
     /// Parse version string from tokens: Int Dot Int
     fn parse_version(&mut self) -> Option<String> {
         if let TokenKind::Int(major) = self.peek_kind() {
             let major_val = *major;
-            self.advance();
+            let major_token = self.advance();
+            self.check_version_component(major_val, &major_token);
 
             if self.peek_kind() != &TokenKind::Dot {
                 self.diags.push(Diagnostic {
@@ -293,7 +335,8 @@ impl Parser {
 
             if let TokenKind::Int(minor) = self.peek_kind() {
                 let minor_val = *minor;
-                self.advance();
+                let minor_token = self.advance();
+                self.check_version_component(minor_val, &minor_token);
                 Some(format!("{}.{}", major_val, minor_val))
             } else {
                 self.diags.push(Diagnostic {
@@ -757,11 +800,43 @@ impl Parser {
 
         let mut ops = Vec::new();
         while self.peek_kind() != &TokenKind::RParen && self.peek_kind() != &TokenKind::Eof {
+            let iter_start = self.pos;
             if let Some(op) = self.parse_op() {
                 ops.push(op);
                 if self.peek_kind() == &TokenKind::Comma {
                     self.advance();
                 }
+            } else {
+                // Malformed op: skip to the next op boundary (a comma or the
+                // interface's closing paren at this nesting level) so the
+                // loop always makes progress instead of retrying the token.
+                let mut depth = 0;
+                loop {
+                    match self.peek_kind() {
+                        TokenKind::Eof => break,
+                        TokenKind::LParen => {
+                            depth += 1;
+                            self.advance();
+                        }
+                        TokenKind::RParen => {
+                            if depth == 0 {
+                                break;
+                            }
+                            depth -= 1;
+                            self.advance();
+                        }
+                        TokenKind::Comma if depth == 0 => {
+                            self.advance();
+                            break;
+                        }
+                        _ => {
+                            self.advance();
+                        }
+                    }
+                }
+            }
+            if self.pos == iter_start {
+                self.advance();
             }
         }
 
@@ -922,6 +997,7 @@ impl Parser {
         let mut in_clauses = false;
 
         while self.peek_kind() != &TokenKind::RParen && self.peek_kind() != &TokenKind::Eof {
+            let iter_start = self.pos;
             if !in_clauses {
                 // Check if next is a clause keyword
                 if self.check_ident("requires")
@@ -988,6 +1064,11 @@ impl Parser {
                         self.advance();
                     }
                 }
+            }
+            // Progress invariant: a mode switch without consumption is fine
+            // once, but two consecutive stalled iterations cannot happen.
+            if self.pos == iter_start && !in_clauses {
+                self.advance();
             }
         }
 
@@ -1268,6 +1349,7 @@ impl Parser {
 
         let mut blocks = Vec::new();
         while self.peek_kind() != &TokenKind::RParen && self.peek_kind() != &TokenKind::Eof {
+            let iter_start = self.pos;
             if let Some(block) = self.parse_acceptance_block() {
                 blocks.push(block);
                 if self.peek_kind() == &TokenKind::Comma {
@@ -1290,6 +1372,10 @@ impl Parser {
                 if self.peek_kind() == &TokenKind::Comma {
                     self.advance();
                 }
+            }
+            // Progress invariant: never retry the same token.
+            if self.pos == iter_start {
+                self.advance();
             }
         }
 
@@ -1337,27 +1423,28 @@ impl Parser {
             self.advance();
             let name = self.parse_ident()?;
             self.expect(TokenKind::Eq, "`=`")?;
-            // Scenario steps are complex; for now just parse the outer pack structure
-            // The grammar for scenario steps is special (given/when/then keywords)
+            // Scenario body: semicolon-sequenced steps inside parens.
+            // Each step is `keyword value` (when/then) or a binding
+            // `given name = value`, stored as PackItems keyed by the step
+            // keyword; a binding becomes Nested([{name: value}]).
             let steps = if self.peek_kind() == &TokenKind::LParen {
-                // Skip the scenario body for now - it has special syntax
-                self.advance(); // skip '('
-                let mut paren_depth = 1;
-                while self.pos < self.tokens.len() && paren_depth > 0 {
-                    match self.peek_kind() {
-                        TokenKind::LParen => paren_depth += 1,
-                        TokenKind::RParen => paren_depth -= 1,
-                        _ => {}
+                self.advance();
+                let mut steps: Pack = Vec::new();
+                while self.peek_kind() != &TokenKind::RParen && self.peek_kind() != &TokenKind::Eof
+                {
+                    let iter_start = self.pos;
+                    if let Some(step) = self.parse_scenario_step() {
+                        steps.push(step);
                     }
-                    if paren_depth > 0 {
+                    if self.peek_kind() == &TokenKind::Semi {
+                        self.advance();
+                    }
+                    if self.pos == iter_start {
                         self.advance();
                     }
                 }
-                if paren_depth == 0 {
-                    self.advance(); // skip final ')'
-                }
-                // Return empty pack - scenario parsing is not implemented
-                Vec::new()
+                self.expect(TokenKind::RParen, "`)`")?;
+                steps
             } else {
                 Vec::new()
             };
@@ -1434,6 +1521,43 @@ impl Parser {
             });
             None
         }
+    }
+
+    /// Parse one scenario step: `keyword value` or `keyword name = value`.
+    fn parse_scenario_step(&mut self) -> Option<PackItem> {
+        let key = self.parse_ident()?;
+        let key_span = key.span;
+
+        let value = if self.peek_kind() == &TokenKind::Semi
+            || self.peek_kind() == &TokenKind::RParen
+            || self.peek_kind() == &TokenKind::Eof
+        {
+            PackValue::Unit
+        } else if let TokenKind::Ident(_) = self.peek_kind() {
+            // Lookahead for a binding: `given owner = authenticated_owner`.
+            let saved = self.pos;
+            let bound = self.parse_ident()?;
+            if self.peek_kind() == &TokenKind::Eq {
+                self.advance();
+                let inner = self.parse_pack_value().unwrap_or(PackValue::Unit);
+                PackValue::Nested(vec![PackItem {
+                    span: bound.span,
+                    key: bound,
+                    value: inner,
+                }])
+            } else {
+                self.pos = saved;
+                self.parse_pack_value().unwrap_or(PackValue::Unit)
+            }
+        } else {
+            self.parse_pack_value().unwrap_or(PackValue::Unit)
+        };
+
+        Some(PackItem {
+            key,
+            value,
+            span: key_span,
+        })
     }
 
     /// Parse a pack: (item, item, ...) or (item; item; ...)
@@ -1537,12 +1661,9 @@ impl Parser {
                                 // This looks like a pack
                                 pack_items.push(item);
 
-                                let mut pack_iterations = 0;
-                                while (self.peek_kind() == &TokenKind::Comma
-                                    || self.peek_kind() == &TokenKind::Semi)
-                                    && pack_iterations < 1000
+                                while self.peek_kind() == &TokenKind::Comma
+                                    || self.peek_kind() == &TokenKind::Semi
                                 {
-                                    pack_iterations += 1;
                                     self.advance();
                                     if self.peek_kind() == &TokenKind::RParen {
                                         break;
@@ -1574,17 +1695,17 @@ impl Parser {
                     }
 
                     if !is_pack {
-                        // Parse as plain value list
-                        let mut value_iterations = 0;
+                        // Parse as plain value list. parse_pack_value only
+                        // returns None after consuming or diagnosing, and the
+                        // stuck-check below guarantees loop progress.
                         loop {
-                            value_iterations += 1;
-                            if value_iterations > 1000 {
-                                break; // Safety limit
-                            }
-
+                            let iter_start = self.pos;
                             if let Some(val) = self.parse_pack_value() {
                                 value_items.push(val);
                             } else {
+                                if self.pos == iter_start && self.pos < self.tokens.len() {
+                                    self.advance();
+                                }
                                 break;
                             }
 
@@ -1616,21 +1737,25 @@ impl Parser {
                     self.advance();
                     let mut args = Vec::new();
                     if self.peek_kind() != &TokenKind::RParen {
-                        // Try to parse as pack items (comma or semicolon-separated key-value pairs)
-                        let mut iterations = 0;
+                        // Each argument is either a plain value (`owner`,
+                        // `256`) or a key/value pair (`class nano`), which
+                        // becomes a single-item Nested pack. The stuck-check
+                        // enforces loop progress.
                         loop {
-                            iterations += 1;
-                            if iterations > 1000 {
-                                break; // Safety limit
-                            }
                             let item_start = self.pos;
-                            if let Some(item) = self.parse_pack_item() {
-                                args.push(PackValue::Nested(vec![item]));
-                            } else {
-                                // If position didn't advance, skip to prevent infinite loop
-                                if self.pos == item_start && self.pos < self.tokens.len() {
-                                    self.advance();
+                            if let TokenKind::Ident(_) = self.peek_kind() {
+                                if let Some(item) = self.parse_pack_item() {
+                                    if matches!(item.value, PackValue::Unit) {
+                                        args.push(PackValue::Word(item.key));
+                                    } else {
+                                        args.push(PackValue::Nested(vec![item]));
+                                    }
                                 }
+                            } else if let Some(val) = self.parse_pack_value() {
+                                args.push(val);
+                            }
+                            if self.pos == item_start && self.pos < self.tokens.len() {
+                                self.advance();
                             }
 
                             if self.peek_kind() == &TokenKind::Comma

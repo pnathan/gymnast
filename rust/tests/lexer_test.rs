@@ -672,3 +672,30 @@ fn test_all_punctuation_in_sequence() {
     assert_eq!(types.next().unwrap(), &TokenKind::Arrow);
     assert_eq!(types.next().unwrap(), &TokenKind::DotDot);
 }
+
+#[test]
+fn test_utf8_string_content_roundtrips() {
+    // Multi-byte UTF-8 in string literals must not be corrupted into
+    // per-byte mojibake.
+    let (tokens, diags) = Lexer::tokenize("\"Café — geführt\"");
+    assert!(diags.is_empty());
+    match &tokens[0].kind {
+        TokenKind::Str(s) => assert_eq!(s, "Café — geführt"),
+        other => panic!("expected string token, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_non_ascii_outside_string_is_one_error_per_char() {
+    // One E001 per character (not per byte), and lexing continues.
+    let (tokens, diags) = Lexer::tokenize("mode é = opaque text");
+    assert_eq!(diags.iter().filter(|d| d.code == "E001").count(), 1);
+    let idents: Vec<_> = tokens
+        .iter()
+        .filter_map(|t| match &t.kind {
+            TokenKind::Ident(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(idents, vec!["mode", "opaque", "text"]);
+}

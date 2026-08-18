@@ -365,7 +365,9 @@ impl Checker {
             return None;
         }
 
-        candidates.sort_by_key(|(dist, _)| *dist);
+        // Tie-break equal distances by name: HashMap iteration order would
+        // otherwise make the suggestion nondeterministic across runs.
+        candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         Some(candidates[0].1.clone())
     }
 
@@ -525,7 +527,9 @@ impl Checker {
             return None;
         }
 
-        candidates.sort_by_key(|(dist, _)| *dist);
+        // Tie-break equal distances by name: HashMap iteration order would
+        // otherwise make the suggestion nondeterministic across runs.
+        candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         Some(candidates[0].1.clone())
     }
 

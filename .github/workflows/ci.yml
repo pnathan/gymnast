@@ -24,3 +24,21 @@ jobs:
           bin/gymnast compile examples/todo.lisp todo-spec build/one
           bin/gymnast compile examples/todo.lisp todo-spec build/two
           diff -ru build/one build/two
+
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Build (warnings are errors)
+        run: cargo build --all-targets
+        env:
+          RUSTFLAGS: -D warnings
+      - name: Tests
+        run: cargo test
+      - name: Check todo.gym fixture
+        run: cargo run -- check ../examples/todo.gym

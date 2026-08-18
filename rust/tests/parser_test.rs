@@ -556,11 +556,153 @@ synthesis prototype = target ruby / rails (model small_code_model (class nano))
     }
 }
 
-// Test acceptance declaration - currently disabled due to parse_pred infinite loop
-// #[test]
-// fn test_acceptance_declaration() {
-//     ...
-// }
+#[test]
+fn test_acceptance_declaration() {
+    let src = r#"
+spec test = v 0.1 owner o exports X
+
+acceptance production = of todo_app (
+  property create_then_read =
+    generate (authenticated_editor actor, valid_task task)
+    must contains_equivalent (result, task),
+
+  scenario sharing_boundary = (
+    given owner = authenticated_owner;
+    when invite_distinct (owner, 256);
+    then succeeds;
+    when invite_distinct (owner, 257);
+    then fails_with sharing_limit ),
+
+  concurrency boundary_race = (actors 500, schedule adversarial)
+    must active_and_pending <= 256,
+
+  coverage (every_operation, every_error, boundaries),
+
+  execution (clock virtual, timezone "UTC") )
+"#;
+    let (ast, diags) = parser::parse(src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {:#?}", diags);
+    let file = ast.unwrap();
+    match &file.decls[0] {
+        Decl::Acceptance(a) => {
+            assert_eq!(a.name.text, "production");
+            assert_eq!(a.subject.text, "todo_app");
+            assert_eq!(a.blocks.len(), 5);
+
+            // Scenario steps must be captured, not silently discarded.
+            let scenario = a
+                .blocks
+                .iter()
+                .find_map(|b| match b {
+                    AcceptanceBlock::Scenario { name, steps }
+                        if name.text == "sharing_boundary" =>
+                    {
+                        Some(steps)
+                    }
+                    _ => None,
+                })
+                .expect("scenario block");
+            assert_eq!(scenario.len(), 5, "steps: {:#?}", scenario);
+            let keys: Vec<&str> = scenario.iter().map(|s| s.key.text.as_str()).collect();
+            assert_eq!(keys, vec!["given", "when", "then", "when", "then"]);
+            // `given owner = authenticated_owner` is a binding.
+            match &scenario[0].value {
+                PackValue::Nested(items) => {
+                    assert_eq!(items.len(), 1);
+                    assert_eq!(items[0].key.text, "owner");
+                }
+                other => panic!("expected Nested binding, got {:?}", other),
+            }
+            // `when invite_distinct (owner, 256)` is a call with plain args.
+            match &scenario[1].value {
+                PackValue::Call { name, args } => {
+                    assert_eq!(name.text, "invite_distinct");
+                    assert_eq!(args.len(), 2);
+                    assert!(matches!(args[1], PackValue::Int(256)));
+                }
+                other => panic!("expected Call step, got {:?}", other),
+            }
+        }
+        _ => panic!("Expected Acceptance declaration"),
+    }
+}
+
+#[test]
+fn test_malformed_op_recovers_without_hang() {
+    // A missing `=` in an op previously made parse_interface loop forever.
+    let src = r#"
+spec test = v 0.1 owner o exports X
+
+interface svc = for user (
+  cmd broken (ListId list) Task ! (conflict),
+  qry fine = (ListId list) Task ! (not_found) )
+
+mode After = opaque text
+"#;
+    let (ast, diags) = parser::parse(src);
+    assert!(!diags.is_empty(), "the malformed op must be diagnosed");
+    let file = ast.expect("recovery must still produce a file");
+    // The valid op and the following declaration both survive.
+    let iface = file
+        .decls
+        .iter()
+        .find_map(|d| match d {
+            Decl::Interface(i) => Some(i),
+            _ => None,
+        })
+        .expect("interface survives");
+    assert!(iface.ops.iter().any(|o| o.name.text == "fine"));
+    assert!(file
+        .decls
+        .iter()
+        .any(|d| matches!(d, Decl::Mode(m) if m.name.text == "After")));
+}
+
+#[test]
+fn test_error_recovery_inside_nested_parens_keeps_later_decls() {
+    // Recovery entered at paren depth >= 2 previously swallowed the rest
+    // of the file.
+    let src = r#"
+spec test = v 0.1 owner o exports X
+
+application a = (key (inner 5 = ), other 1)
+
+mode Good = opaque text
+mode Also = opaque int
+"#;
+    let (ast, diags) = parser::parse(src);
+    assert!(!diags.is_empty(), "the malformed pack must be diagnosed");
+    let file = ast.expect("recovery must still produce a file");
+    assert!(
+        file.decls
+            .iter()
+            .any(|d| matches!(d, Decl::Mode(m) if m.name.text == "Good")),
+        "decls after the error must survive recovery: {:#?}",
+        file.decls
+    );
+    assert!(file
+        .decls
+        .iter()
+        .any(|d| matches!(d, Decl::Mode(m) if m.name.text == "Also")));
+}
+
+#[test]
+fn test_version_leading_zero_rejected() {
+    let src = "spec test = v 1.05 owner o exports X";
+    let (_, diags) = parser::parse(src);
+    assert!(
+        diags.iter().any(|d| d.code == "E103"),
+        "1.05 must not silently collapse to 1.5: {:#?}",
+        diags
+    );
+}
+
+#[test]
+fn test_empty_token_stream_does_not_panic() {
+    let mut p = parser::Parser::new(Vec::new());
+    let file = p.parse_file();
+    assert!(file.is_none());
+}
 
 #[test]
 fn test_constraint_declaration() {
@@ -631,11 +773,44 @@ actor user = person (identity google_openid (issuer, subject))
     }
 }
 
-// Test pack nested syntax - currently disabled due to complex nested parsing
-// #[test]
-// fn test_pack_nested_syntax() {
-//     ...
-// }
+#[test]
+fn test_pack_nested_syntax() {
+    let src = r#"
+spec test = v 0.1 owner o exports X
+
+synthesis prototype = target ruby / rails (
+  model small_code_model (class nano, temperature 0, max_attempts 3),
+  attempts 3 )
+"#;
+    let (ast, diags) = parser::parse(src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {:#?}", diags);
+    let file = ast.unwrap();
+    match &file.decls[0] {
+        Decl::Synthesis(s) => {
+            let model = s
+                .attrs
+                .iter()
+                .find(|i| i.key.text == "model")
+                .expect("model attr");
+            match &model.value {
+                PackValue::Call { name, args } => {
+                    assert_eq!(name.text, "small_code_model");
+                    // Each key/value argument is a single-item nested pack.
+                    assert_eq!(args.len(), 3);
+                    match &args[1] {
+                        PackValue::Nested(items) => {
+                            assert_eq!(items[0].key.text, "temperature");
+                            assert!(matches!(items[0].value, PackValue::Int(0)));
+                        }
+                        other => panic!("expected Nested arg, got {:?}", other),
+                    }
+                }
+                other => panic!("expected Call value, got {:?}", other),
+            }
+        }
+        _ => panic!("Expected Synthesis declaration"),
+    }
+}
 
 #[test]
 fn test_expression_path() {

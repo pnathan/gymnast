@@ -547,3 +547,28 @@ constraint con = workload on comp under () must true
     let errors: Vec<_> = diags.iter().filter(|d| d.code == "E205").collect();
     assert_eq!(errors.len(), 0);
 }
+
+#[test]
+fn test_suggestion_tiebreak_is_deterministic() {
+    // Two candidates at equal edit distance: the suggestion must be the
+    // alphabetically first, not whatever HashMap iteration happens to yield.
+    let src = r#"
+spec test = v 0.1 owner o exports Alpha1
+
+mode Alpha1 = opaque text
+mode Alpha2 = opaque text
+mode Holder = struct (Alpha3 field)
+"#;
+    let (ast, parse_diags) = parser::parse(src);
+    assert!(parse_diags.is_empty(), "{:#?}", parse_diags);
+    let diags = check(&ast.unwrap());
+    let unknown = diags
+        .iter()
+        .find(|d| d.code == "E202")
+        .expect("Alpha3 must be flagged");
+    assert!(
+        unknown.message.contains("did you mean 'Alpha1'?"),
+        "suggestion must tie-break alphabetically, got: {}",
+        unknown.message
+    );
+}
