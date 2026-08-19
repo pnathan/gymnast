@@ -58,7 +58,6 @@ use gymnast_rs::parser;
 use gymnast_rs::plan::plan;
 use gymnast_rs::sexpr::Sexpr;
 use std::fs;
-use std::io::Write;
 
 // ---------------------------------------------------------------------
 // Shared fixtures / helpers (not tests themselves).
@@ -612,52 +611,46 @@ fn oracle_1b_w404_never_fires_for_design_partition_nodes() {
     );
 }
 
-/// See the file-level NOTE: per the phase-4 doc's own worked example, a
-/// minimal spec with one behavior and no acceptance block should yield a
-/// W404 for the behavior node, and the CLI should still exit 0 (a warning
-/// does not fail the build). Written literally per the plan; flagged as a
-/// probable plan/architecture conflict in the file header for the
-/// integrator.
+/// INTEGRATOR RESOLUTION of the conflict flagged in the file-level NOTE:
+/// the phase-4 doc's worked example ("a behavior with no acceptance block
+/// yields W404") was a plan-doc bug — under the fixed kind-based table the
+/// acceptance-harness's input-kind set is a superset of every normative
+/// kind, so elaborator-produced IR always has an evidence path by
+/// construction, and that is CORRECT (the harness verifies behaviors and
+/// invariants whether or not the spec declares acceptance content). W404
+/// exists as a guard for non-elaborator IR and future dynamic planning, so
+/// its firing path is pinned the same way E402/E403's are: with a
+/// synthetic Ir whose obligations partition carries a node of a kind no
+/// verification-class plan node consumes (Ir::new does not re-partition).
+/// The plan doc's example is amended in the same commit as this edit.
 #[test]
-fn oracle_1b_w404_fires_for_minimal_spec_missing_acceptance_block() {
-    const MINIMAL_SPEC: &str = "spec w = v 0.1 owner o exports svc\n\nactor user = person\n\ninterface svc = for user (\n  cmd act = () text )\n\nbehavior beh = on svc.act (user) ( )\n";
-
-    let (code, stdout, stderr) = run_plan_cli(MINIMAL_SPEC);
-    assert_eq!(
-        code, 0,
-        "a spec whose only diagnostic is a W404 WARNING must still exit 0, got stderr: {}",
-        stderr
+fn oracle_1b_w404_fires_for_unconsumed_normative_node() {
+    let gadget = IrNode::new(
+        "w/gadget/G".to_string(),
+        "gadget",
+        "G".to_string(),
+        vec![],
+        vec![],
     );
+    let ir = Ir::new(
+        "gymnast.ir/0.1".to_string(),
+        "w".to_string(),
+        vec![],
+        vec![],
+        vec![],
+        vec![gadget], // obligations partition: normative, W404-eligible
+        vec![],
+        vec![],
+    );
+    let p = plan(&ir);
+    let has_w404 = p
+        .diagnostics
+        .iter()
+        .any(|d| d.assoc("code").and_then(|c| c.as_str()) == Some("W404"));
     assert!(
-        stdout.contains("W404") || stderr.contains("W404"),
-        "expected a W404 diagnostic for the behavior node with no acceptance block; \
-         stdout: {}\nstderr: {}",
-        stdout,
-        stderr
+        has_w404,
+        "a normative node no verification-class plan node consumes must \
+         raise W404, got: {:?}",
+        p.diagnostics.iter().map(|d| d.print()).collect::<Vec<_>>()
     );
-}
-
-fn run_plan_cli(source: &str) -> (i32, String, String) {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir();
-    let path = dir.join(format!(
-        "gymnast-plan-table-oracle-{}-{}.gym",
-        std::process::id(),
-        unique
-    ));
-    let mut f = fs::File::create(&path).expect("write temp spec");
-    f.write_all(source.as_bytes()).unwrap();
-    drop(f);
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_gymnast-rs"))
-        .args(["plan", path.to_str().unwrap()])
-        .output()
-        .expect("run gymnast-rs plan");
-    fs::remove_file(&path).ok();
-    (
-        out.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
 }

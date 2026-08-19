@@ -72,3 +72,8 @@ jobs:
           if cargo run -- plan /tmp/bad-plan.gym; then
             echo "plan accepted a spec with a duplicate semantic id" >&2; exit 1
           fi
+      - name: Reproducible compilation
+        run: |
+          cargo run -- compile ../examples/todo.gym /tmp/rust-build-one
+          cargo run -- compile ../examples/todo.gym /tmp/rust-build-two
+          diff -ru /tmp/rust-build-one /tmp/rust-build-two

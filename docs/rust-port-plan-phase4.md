@@ -247,10 +247,19 @@ the expected values from that doc into the test, not from plan.rs), plus
 W404 (item 1b): a synthetic Ir with a behavior node and no
 verification coverage... W404 needs plan-internal knowledge; simplest
 oracle: assert todo.gym's plan has zero W404 diagnostics AND a
-hand-built Plan-level check is NOT possible externally — instead assert
-via a spec fixture: a minimal .gym spec with one behavior and no
-acceptance block yields a W404 for the behavior node and exit 0 (it is
-a warning). Also: `PlanNode::verify_fingerprint` is true for every
+hand-built Plan-level check is NOT possible externally — the firing
+path is pinned with a synthetic Ir whose obligations partition carries
+a node of a kind no verification-class plan node consumes (Ir::new
+does not re-partition). NOTE (integrator amendment): an earlier
+revision's worked example here — "a behavior with no acceptance block
+yields W404" — was a plan-doc bug the phase-4 crew correctly flagged
+and refused to implement around: under the fixed kind-based table the
+acceptance-harness's input kinds are a superset of every normative
+kind, so elaborator-produced IR always has an evidence path by
+construction, which is correct (the harness verifies behaviors and
+invariants whether or not the spec declares acceptance content). W404
+guards non-elaborator IR and future dynamic planning.
+Also: `PlanNode::verify_fingerprint` is true for every
 todo.gym plan node, and false after tampering with a cloned node's
 `may_write`.
 

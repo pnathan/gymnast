@@ -137,11 +137,24 @@ impl PlanNode {
         ]
     }
 
-    fn contract_sexpr(&self) -> Sexpr {
+    /// The `node-contract`-headed, fingerprint-free form: the SAME shape
+    /// `PlanNode::new` fingerprints at construction. Public so the
+    /// candidate firewall (`candidate.rs`) can recompute a node's
+    /// contract from the node itself rather than hand-rolling the head
+    /// rewrite (phase 4, scope item 1a).
+    pub fn contract_sexpr(&self) -> Sexpr {
         Sexpr::list(vec![
             Sexpr::sym("node-contract"),
             Sexpr::list(self.field_pairs()),
         ])
+    }
+
+    /// Recomputes the fingerprint over `contract_sexpr()` and compares it
+    /// to the stored `fingerprint`. `true` for an untampered node; `false`
+    /// once any contract field has been mutated after construction (e.g.
+    /// on a hand-tampered clone) without re-deriving the fingerprint.
+    pub fn verify_fingerprint(&self) -> bool {
+        self.fingerprint == fingerprint::fingerprint(&self.contract_sexpr())
     }
 
     /// `(plan-node ((id "...") ... (fingerprint "fnv1a64:...")))` — the
@@ -640,7 +653,8 @@ fn coverage_entries(ir: &Ir, nodes: &[PlanNode]) -> Vec<(String, Vec<String>)> {
 }
 
 /// E403 unplanned-semantic-node: an IR node whose id appears in no plan
-/// node's `inputs`.
+/// node's `inputs`. Message corrected (phase 4, scope item 1b) to say
+/// "no implementation path".
 fn coverage_diagnostics(coverage: &[(String, Vec<String>)]) -> Vec<Sexpr> {
     coverage
         .iter()
@@ -650,8 +664,67 @@ fn coverage_diagnostics(coverage: &[(String, Vec<String>)]) -> Vec<Sexpr> {
                 "error",
                 "E403",
                 (0, 0),
+                format!("semantic node {} has no implementation path", id),
+            )
+        })
+        .collect()
+}
+
+/// W404 missing-evidence-path (warning): a node in the `transitions` or
+/// `obligations` partitions whose coverage list contains no
+/// verification-class plan node (phase 4, scope item 1b). Design-partition
+/// nodes are definitional, not normative, and are never checked here.
+///
+/// NOTE (ambiguity, reported per Process Rule 1): under the FIXED 8-node
+/// table, `acceptance-harness` (the sole verification-class node) draws
+/// its `inputs` from the kind set `{behavior, invariant, constraint,
+/// acceptance, interface, state}`, which is a strict superset of the
+/// `transitions ∪ obligations` partition kinds `{behavior, invariant,
+/// constraint, acceptance}` (see `elaborate.rs`'s partition match arms).
+/// Because the table selects inputs purely by kind across the whole IR,
+/// every node landing in `transitions`/`obligations` is therefore always
+/// a member of `acceptance-harness`'s input-kind set and so always
+/// present in its coverage list — this diagnostic can structurally never
+/// fire under the current fixed-table architecture, independent of
+/// whether the source spec has an `acceptance` declaration at all. See
+/// `plan_table_oracle_test.rs`'s file-level NOTE and
+/// `oracle_1b_w404_fires_for_minimal_spec_missing_acceptance_block` for
+/// the full analysis and the resulting oracle/plan conflict; this
+/// function implements the doc's literal coverage-based rule rather than
+/// inventing a different, per-declaration-relational semantics the fixed
+/// table has no machinery for.
+fn missing_evidence_diagnostics(
+    ir: &Ir,
+    nodes: &[PlanNode],
+    coverage: &[(String, Vec<String>)],
+) -> Vec<Sexpr> {
+    let verification_ids: std::collections::HashSet<&str> = nodes
+        .iter()
+        .filter(|n| n.class == "verification")
+        .map(|n| n.id.as_str())
+        .collect();
+    let normative_ids: std::collections::HashSet<&str> = ir
+        .transitions
+        .iter()
+        .chain(ir.obligations.iter())
+        .map(|n| n.id.as_str())
+        .collect();
+    coverage
+        .iter()
+        .filter(|(id, _)| normative_ids.contains(id.as_str()))
+        .filter(|(_, plan_ids)| {
+            !plan_ids
+                .iter()
+                .any(|p| verification_ids.contains(p.as_str()))
+        })
+        .map(|(id, _)| {
+            diag_sexpr(
+                "warning",
+                "W404",
+                (0, 0),
                 format!(
-                    "semantic node {} has no implementation or evidence path",
+                    "semantic node {} has no evidence path (no verification-class plan node \
+                     covers it)",
                     id
                 ),
             )
@@ -688,6 +761,7 @@ pub fn plan(ir: &Ir) -> Plan {
     let mut diagnostics = dependency_diagnostics(&nodes);
     let coverage = coverage_entries(ir, &nodes);
     diagnostics.extend(coverage_diagnostics(&coverage));
+    diagnostics.extend(missing_evidence_diagnostics(ir, &nodes, &coverage));
 
     Plan::new(
         PLAN_SCHEMA.to_string(),
