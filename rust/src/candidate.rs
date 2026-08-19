@@ -70,9 +70,59 @@ impl Candidate {
         self.field("node-id").and_then(|v| v.as_str())
     }
 
+    /// Every path claim in the `files` field, WELL-FORMED OR NOT: for a
+    /// conforming `(string string)` pair the path; for an off-shape
+    /// entry whose first element is still a string, that string (it is
+    /// a path claim and must face E503/E504 like any other — the Lamedh
+    /// reference takes the car of every entry). Paired with the list of
+    /// malformed entries for E512. The firewall must never be lossier
+    /// than the reference.
+    pub fn file_entries_audit(&self) -> (Vec<String>, Vec<Sexpr>) {
+        let mut paths = Vec::new();
+        let mut malformed = Vec::new();
+        if let Some(entries) = self.field("files").and_then(|v| v.as_list()) {
+            for entry in entries {
+                match entry.as_list() {
+                    Some(pair)
+                        if pair.len() == 2
+                            && pair[0].as_str().is_some()
+                            && pair[1].as_str().is_some() =>
+                    {
+                        paths.push(pair[0].as_str().unwrap_or_default().to_string());
+                    }
+                    Some(pair) => {
+                        if let Some(path) = pair.first().and_then(|p| p.as_str()) {
+                            paths.push(path.to_string());
+                        }
+                        malformed.push(entry.clone());
+                    }
+                    None => malformed.push(entry.clone()),
+                }
+            }
+        }
+        (paths, malformed)
+    }
+
+    /// Raw entries of a vocabulary-list field that are neither strings
+    /// nor symbols — malformed under the candidate protocol (E512).
+    fn malformed_vocab_entries(&self, key: &str) -> Vec<Sexpr> {
+        self.field(key)
+            .and_then(|v| v.as_list())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|s| sexpr_as_vocab_string(s).is_none())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// `(path, content)` pairs from the `files` field, in list order.
     /// Entries that are not a two-element `(string string)` pair are
-    /// skipped rather than treated as an error.
+    /// skipped here (the WRITE side); the firewall separately audits
+    /// them via `file_entries_audit` so a malformed entry is always a
+    /// diagnostic, never silence.
     pub fn files(&self) -> Vec<(String, String)> {
         self.field("files")
             .and_then(|v| v.as_list())
@@ -170,6 +220,22 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
 
     let mut diags = Vec::new();
 
+    // E513 node-contract-fingerprint-mismatch: the node the candidate is
+    // being validated AGAINST must itself be intact — a PlanNode read
+    // back from a cache or results file with a tampered may_write would
+    // otherwise let the firewall validate against a forged contract.
+    if !node.verify_fingerprint() {
+        diags.push(diag_sexpr(
+            "error",
+            "E513",
+            (0, 0),
+            format!(
+                "plan node contract fingerprint does not verify: {}",
+                node.id
+            ),
+        ));
+    }
+
     // E502 candidate-node-mismatch.
     if c.node_id() != Some(node.id.as_str()) {
         diags.push(diag_sexpr(
@@ -184,11 +250,14 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
         ));
     }
 
-    let files = c.files();
+    // Path checks run over EVERY path claim, well-formed or not — the
+    // Lamedh reference takes the car of every files entry, and the
+    // firewall must never be lossier than the reference (fail closed).
+    let (claimed_paths, malformed_entries) = c.file_entries_audit();
 
     // E503 unauthorized-output-path: one per candidate file path not in
     // `node.may_write`.
-    for (path, _) in &files {
+    for path in &claimed_paths {
         if !node.may_write.iter().any(|allowed| allowed == path) {
             diags.push(diag_sexpr(
                 "error",
@@ -200,7 +269,9 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
     }
 
     // E504 missing-output-file: one per required `node.may_write` path
-    // absent from the candidate's files.
+    // absent from the candidate's WELL-FORMED files (a malformed entry
+    // cannot satisfy a required artifact).
+    let files = c.files();
     for allowed in &node.may_write {
         if !files.iter().any(|(path, _)| path == allowed) {
             diags.push(diag_sexpr(
@@ -210,6 +281,22 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
                 format!("candidate omitted a required artifact: {}", allowed),
             ));
         }
+    }
+
+    // E512 malformed-candidate-entry: every files entry that is not a
+    // two-element (string string) pair, and every edge-uses entry that
+    // is neither a string nor a symbol. Malformed input is a diagnostic,
+    // never silence.
+    for entry in malformed_entries
+        .iter()
+        .chain(c.malformed_vocab_entries("edge-uses").iter())
+    {
+        diags.push(diag_sexpr(
+            "error",
+            "E512",
+            (0, 0),
+            format!("malformed candidate entry: {}", entry.print()),
+        ));
     }
 
     // E505 candidate-added-assumptions.
@@ -381,5 +468,111 @@ mod tests {
         let good = candidate("m/plan/x", &[("out/a.rb", "puts 1")]);
         assert!(candidate_diagnostics(&node, &good).is_empty());
         assert!(candidate_valid(&node, &good));
+    }
+}
+
+#[cfg(test)]
+mod gate_regression_tests {
+    use super::*;
+    use crate::sexpr::Sexpr;
+
+    fn node() -> crate::plan::PlanNode {
+        crate::plan::PlanNode::new(
+            "m/plan/x".to_string(),
+            "structural",
+            "x-v1",
+            vec![],
+            vec![],
+            Sexpr::list(vec![Sexpr::sym("ruby")]),
+            Sexpr::sym("none"),
+            vec!["generated/a.rb".to_string()],
+            vec![],
+            vec![],
+            vec![],
+        )
+    }
+
+    fn candidate_with_files(files: Vec<Sexpr>) -> Sexpr {
+        Sexpr::list(vec![
+            Sexpr::sym("candidate"),
+            Sexpr::list(vec![
+                Sexpr::pair("node-id", Sexpr::Str("m/plan/x".to_string())),
+                Sexpr::pair("files", Sexpr::list(files)),
+            ]),
+        ])
+    }
+
+    fn codes(diags: &[Sexpr]) -> Vec<String> {
+        diags
+            .iter()
+            .filter_map(|d| d.assoc("code").and_then(|c| c.as_str().map(String::from)))
+            .collect()
+    }
+
+    /// Phase-4 gate Finding 2: an off-shape files entry carrying an
+    /// unauthorized path must trip E503 AND E512 — never pass silently.
+    #[test]
+    fn test_malformed_file_entry_with_hostile_path_is_not_fail_open() {
+        let c = candidate_with_files(vec![
+            Sexpr::list(vec![
+                Sexpr::Str("generated/a.rb".to_string()),
+                Sexpr::Str("ok".to_string()),
+            ]),
+            Sexpr::list(vec![
+                Sexpr::Str("../../etc/passwd".to_string()),
+                Sexpr::sym("evil"), // symbol content: off-shape entry
+            ]),
+            Sexpr::Str("just-a-string".to_string()),
+        ]);
+        let diags = candidate_diagnostics(&node(), &c);
+        let codes = codes(&diags);
+        assert!(codes.contains(&"E503".to_string()), "got {:?}", codes);
+        assert!(codes.contains(&"E512".to_string()), "got {:?}", codes);
+        assert!(!candidate_valid(&node(), &c));
+    }
+
+    #[test]
+    fn test_malformed_edge_use_entry_is_diagnosed() {
+        let c = Sexpr::list(vec![
+            Sexpr::sym("candidate"),
+            Sexpr::list(vec![
+                Sexpr::pair("node-id", Sexpr::Str("m/plan/x".to_string())),
+                Sexpr::pair(
+                    "files",
+                    Sexpr::list(vec![Sexpr::list(vec![
+                        Sexpr::Str("generated/a.rb".to_string()),
+                        Sexpr::Str("ok".to_string()),
+                    ])]),
+                ),
+                Sexpr::pair(
+                    "edge-uses",
+                    Sexpr::list(vec![Sexpr::list(vec![Sexpr::sym("network")])]),
+                ),
+            ]),
+        ]);
+        let diags = candidate_diagnostics(&node(), &c);
+        assert!(
+            codes(&diags).contains(&"E512".to_string()),
+            "nested edge-use entry must be diagnosed, got {:?}",
+            codes(&diags)
+        );
+    }
+
+    /// Phase-4 gate Finding 5: the firewall validates the NODE too — a
+    /// tampered contract must fail before any candidate check.
+    #[test]
+    fn test_tampered_node_contract_fails_firewall() {
+        let mut n = node();
+        n.may_write.push("generated/injected.rb".to_string());
+        let c = candidate_with_files(vec![Sexpr::list(vec![
+            Sexpr::Str("generated/a.rb".to_string()),
+            Sexpr::Str("ok".to_string()),
+        ])]);
+        let diags = candidate_diagnostics(&n, &c);
+        assert!(
+            codes(&diags).contains(&"E513".to_string()),
+            "tampered node must trip E513, got {:?}",
+            codes(&diags)
+        );
     }
 }

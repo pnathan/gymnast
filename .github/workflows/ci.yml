@@ -77,3 +77,4 @@ jobs:
           cargo run -- compile ../examples/todo.gym /tmp/rust-build-one
           cargo run -- compile ../examples/todo.gym /tmp/rust-build-two
           diff -ru /tmp/rust-build-one /tmp/rust-build-two
+          diff /tmp/rust-build-one/results.sexpr tests/fixtures/todo-results.sexpr

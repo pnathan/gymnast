@@ -358,6 +358,25 @@ fn cmd_compile(src: &str, file_path: &str, out_dir: &str) {
         &sexpr::canonical_serialize(&results_wrapper),
     );
 
+    // A failed deterministic recipe is a failed compilation: render its
+    // diagnostics like plan diagnostics and fold them into the exit code
+    // — `compile` must never exit 0 having produced nothing.
+    let mut execution_errors = false;
+    for result in &results {
+        for d in &result.diagnostics {
+            let severity = d
+                .assoc("severity")
+                .and_then(|s| s.as_sym())
+                .unwrap_or("error");
+            if severity == "error" {
+                execution_errors = true;
+            }
+            let code = d.assoc("code").and_then(|s| s.as_str()).unwrap_or("");
+            let message = d.assoc("message").and_then(|s| s.as_str()).unwrap_or("");
+            eprintln!("{}[{}]: {}", severity, code, message);
+        }
+    }
+
     for result in &results {
         if result.status != recipe::ExecutionStatus::Succeeded {
             continue;
@@ -381,6 +400,7 @@ fn cmd_compile(src: &str, file_path: &str, out_dir: &str) {
                      skipped: {}",
                     result.node_id, path
                 );
+                execution_errors = true;
                 continue;
             }
             let dest = out_path.join(&path);
@@ -400,11 +420,13 @@ fn cmd_compile(src: &str, file_path: &str, out_dir: &str) {
         }
     }
 
-    std::process::exit(if parse_errors || ir.has_errors() || plan_has_errors {
-        1
-    } else {
-        0
-    });
+    std::process::exit(
+        if parse_errors || ir.has_errors() || plan_has_errors || execution_errors {
+            1
+        } else {
+            0
+        },
+    );
 }
 
 /// Rejects any path containing `..` or starting with `/` (plan section D,

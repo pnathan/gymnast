@@ -149,15 +149,21 @@ fn skip_ws(bytes: &[u8], pos: &mut usize) {
 /// Parse ONE S-expression from untrusted text. Total: never panics,
 /// bounded recursion (nesting past `MAX_PARSE_DEPTH` errors out before
 /// recursing further), rejects trailing non-whitespace after the one
-/// value. Accepts exactly the canonical printer's language: symbols (any
+/// value. Accepts a mild SUPERSET of the canonical printer's language
+/// (leading zeros and `+` signs read as ints; adjacent tokens like
+/// `(abc"def")` tokenize at the delimiter): symbols (any
 /// run of bytes other than whitespace, parens, and `"`), `"..."` strings
 /// with `\"` and `\\` escapes (an unrecognized escape keeps its
 /// backslash, mirroring `lexer.rs`'s `lex_string`), decimal integers
 /// (optional leading `-`), lists, and `nil` reading as the empty list.
 ///
-/// Round-trip law: for every `Sexpr` value `v` built from the
-/// constructors, `parse(&v.print())` == `Ok(v)` — EXCEPT
-/// `Sexpr::List(vec![])`, which prints as `nil` and reads back as the
+/// Round-trip law: for every `Sexpr` value the COMPILER PIPELINE
+/// produces, `parse(&v.print())` == `Ok(v)`. The public constructors can
+/// build values outside that set with more exceptions: `Sym` text that
+/// tokenizes as an int, contains whitespace/parens/quotes, or is empty
+/// does not round-trip (unreachable from specs — the lexer's identifier
+/// charset excludes all of these) — and `Sexpr::List(vec![])`, which
+/// prints as `nil` and reads back as the
 /// empty list (the two are equal as values, so this holds trivially: it
 /// is called out here only because the printed bytes differ from a
 /// literal `()`), and `Sexpr::Sym("nil")`, which is unrepresentable
@@ -182,6 +188,10 @@ pub fn parse(text: &str) -> Result<Sexpr, String> {
 }
 
 fn parse_value(bytes: &[u8], pos: &mut usize, depth: usize) -> Result<Sexpr, String> {
+    // Boundary: the limit counts value-recursion frames, so 256 levels
+    // of non-empty nesting parse and the 257th is rejected; an EMPTY
+    // innermost list adds no child frame and buys exactly one more
+    // level. Bounded (and panic-free) either way.
     if depth > MAX_PARSE_DEPTH {
         return Err(format!(
             "nesting depth exceeds limit of {}",

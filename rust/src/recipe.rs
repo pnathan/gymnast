@@ -552,6 +552,7 @@ fn interface_contracts_executor(ir_slice: &[&IrNode], node: &PlanNode) -> Sexpr 
 fn acceptance_harness_executor(ir_slice: &[&IrNode], node: &PlanNode) -> Sexpr {
     let behaviors = nodes_of_kind(ir_slice, "behavior");
     let invariants = nodes_of_kind(ir_slice, "invariant");
+    let constraints = nodes_of_kind(ir_slice, "constraint");
     let acceptances = nodes_of_kind(ir_slice, "acceptance");
 
     let mut content = ruby_comment_header("Acceptance harness");
@@ -562,6 +563,13 @@ fn acceptance_harness_executor(ir_slice: &[&IrNode], node: &PlanNode) -> Sexpr {
     }
     for invariant in &invariants {
         content.push_str(&format!("    # invariant: {}\n", invariant.id));
+    }
+    // Constraints are normative (obligations partition): the evidence
+    // artifact must carry an entry for each one, or the plan's coverage
+    // claim (W404's "evidence path") is bookkeeping the harness does not
+    // honor — the phase-4 gate's Finding 1.
+    for constraint in &constraints {
+        content.push_str(&format!("    # constraint: {}\n", constraint.id));
     }
     for acceptance in &acceptances {
         for clause in &acceptance.clauses {
@@ -576,9 +584,10 @@ fn acceptance_harness_executor(ir_slice: &[&IrNode], node: &PlanNode) -> Sexpr {
         }
     }
     content.push_str(&format!(
-        "    {{ status: :pass, behaviors: {}, invariants: {} }}\n",
+        "    {{ status: :pass, behaviors: {}, invariants: {}, constraints: {} }}\n",
         behaviors.len(),
         invariants.len(),
+        constraints.len(),
     ));
     content.push_str("  end\nend\n");
 

@@ -684,15 +684,16 @@ fn coverage_diagnostics(coverage: &[(String, Vec<String>)]) -> Vec<Sexpr> {
 /// Because the table selects inputs purely by kind across the whole IR,
 /// every node landing in `transitions`/`obligations` is therefore always
 /// a member of `acceptance-harness`'s input-kind set and so always
-/// present in its coverage list — this diagnostic can structurally never
-/// fire under the current fixed-table architecture, independent of
-/// whether the source spec has an `acceptance` declaration at all. See
-/// `plan_table_oracle_test.rs`'s file-level NOTE and
-/// `oracle_1b_w404_fires_for_minimal_spec_missing_acceptance_block` for
-/// the full analysis and the resulting oracle/plan conflict; this
-/// function implements the doc's literal coverage-based rule rather than
-/// inventing a different, per-declaration-relational semantics the fixed
-/// table has no machinery for.
+/// present in its coverage list — so this diagnostic never fires on
+/// ELABORATOR-PRODUCED IR under the fixed table, independent of whether
+/// the source spec has an `acceptance` declaration. It exists as a guard
+/// for non-elaborator IR (cache reads, hand-built values, future dynamic
+/// planning); the firing path is pinned by
+/// `plan_table_oracle_test.rs::oracle_1b_w404_fires_for_unconsumed_normative_node`
+/// with a synthetic mis-partitioned node. Caveat recorded by the phase-4
+/// gate: kind-membership coverage is a NOMINAL evidence claim — the
+/// acceptance-harness emitter must actually emit an entry per normative
+/// node for the claim to be substantive (it does, including constraints).
 fn missing_evidence_diagnostics(
     ir: &Ir,
     nodes: &[PlanNode],
