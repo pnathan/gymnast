@@ -229,3 +229,17 @@ Definition of done: warning-free `-D warnings --all-targets`; full
 suite green with the oracle byte-identical to Stage 1's commit;
 `todo-adequacy.sexpr` committed once, byte-stable across double runs;
 all prior goldens untouched; delta doc updated.
+
+---
+
+**INTEGRATOR AMENDMENT (post-gate).** The Opus phase-9 gate blocked on
+subject binding and inapplicability honesty; the shipped semantics
+supersede two statements above: `pass` is now "every CRITICAL mutant
+was applied AND killed" (stricter than "no critical mutant survived" —
+an inapplicable critical mutant blocks pass), and the `adequacy`
+subcommand additionally exits 1, emitting NO campaign, when the
+verification bundle carries error-severity diagnostics (an E601
+baseline is unsound). The campaign result is bound to its subject
+(module + IR fingerprint) and carries applied/inapplicable
+accounting. See the "Phase-9 gate fixes" section of
+`docs/ir-contract-deltas.md` and `rust/tests/gate9_regression_test.rs`.

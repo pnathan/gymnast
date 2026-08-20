@@ -241,11 +241,17 @@ fn cmd_verify(src: &str, file_path: &str, _file_name: &str) {
 /// Handle the `adequacy` subcommand: parse, elaborate, run the standard
 /// mutation campaign over the elaborated IR; stdout is the canonical
 /// serialization of `(campaign-result ...)`. Same arity/diagnostic
-/// contract as `verify` (plan-phase9 section E); exit reflects parse/IR
-/// errors ONLY. A failing campaign (`pass nil` — critical mutants
-/// survived) is evidence data carried inside the result, not a process
-/// error — the same rationale as `hold` in the phase-8 evidence bundle.
-/// The reference has no adequacy subcommand; this is a documented delta
+/// contract as `verify` (plan-phase9 section E); exit 1 on parse/IR
+/// errors OR any error-severity diagnostic in the verification bundle
+/// (phase-9 gate, finding 2) — and in the refusal cases NO campaign is
+/// emitted at all, because a campaign over an unsound baseline is
+/// fabricated evidence (unlike `verify`/`ir`/`plan`, which always print
+/// their artifact first; the campaign is a JUDGMENT over verification,
+/// not a projection of the spec). A failing campaign (`pass nil` —
+/// critical mutants survived or could not be applied) is evidence data
+/// carried inside the result, not a process error — the same rationale
+/// as `hold` in the phase-8 evidence bundle. The reference has no
+/// adequacy subcommand; this is a documented delta
 /// (`docs/ir-contract-deltas.md`).
 fn cmd_adequacy(src: &str, file_path: &str, _file_name: &str) {
     let (ast, parse_diags) = parser::parse(src);

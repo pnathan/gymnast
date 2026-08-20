@@ -180,6 +180,25 @@ fn gate1_campaign_over_foreign_spec_is_bound_and_fabricates_nothing() {
         &Sexpr::List(vec![]),
         "inapplicable critical mutants must not read as pass"
     );
+    // Per-mutant serialization agrees with the summary (gate
+    // re-review residual R1): every mutant-result must carry
+    // (applied nil) — an artifact saying (inapplicable 5) while its
+    // results print (applied t) would be self-contradictory, and the
+    // human-readable half of it is exactly the fabrication F1 was
+    // about.
+    let results = nested_field(&campaign, "results")
+        .as_list()
+        .expect("results list");
+    assert_eq!(results.len(), 5);
+    for r in results {
+        assert_eq!(
+            r.assoc("applied").map(|a| a.print()),
+            Some("nil".to_string()),
+            "every mutant-result must serialize applied nil: {}",
+            r.print()
+        );
+    }
+
     let subject = nested_field(&campaign, "subject");
     assert_eq!(
         subject.assoc("module").and_then(|m| m.as_str()),

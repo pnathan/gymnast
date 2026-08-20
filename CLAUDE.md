@@ -106,17 +106,39 @@ scripts/
   show-persistence-prompt.lisp prompt inspection utility
 ```
 
-## Rust port (in progress)
+## Rust port (complete pipeline)
 
-A Rust reimplementation of the front half lives in `rust/` (std-only crate
-`gymnast-rs`), targeting a new compact Algol 68-flavored surface language
-(`.gym` files; design in `docs/surface-language.md`, example in
-`examples/todo.gym`). The `.lisp` surface and Lamedh implementation remain
-the reference until parity. Status: phases 1–2 done (lexer, parser, checker,
-profile expansion, elaborator, canonical IR + FNV-1a fingerprints); phase 3
-(planner) pending. IR shape differences from the Lamedh reference are
-catalogued in `docs/ir-contract-deltas.md`; execution plans in
-`docs/rust-port-plan.md` and `docs/rust-port-plan-phase2.md`.
+A Rust reimplementation of the FULL pipeline lives in `rust/` (std-only
+crate `gymnast-rs`, zero dependencies, `#![forbid(unsafe_code)]`),
+targeting a compact Algol 68-flavored surface language (`.gym` files;
+design in `docs/surface-language.md`; examples `examples/todo.gym` and
+`examples/bi-ingest.gym`). The `.lisp` corpus and Lamedh implementation
+remain the semantic reference; every deliberate deviation is catalogued
+in `docs/ir-contract-deltas.md` (the authority — consumers port against
+it, never against Lamedh goldens). Execution plans for phases 1–9 are in
+`docs/rust-port-plan*.md`; the shared-domains / gRPC / OpenAPI interop
+design (proposed phase 10+) is `docs/shared-domains-design.md`.
+
+Status: phases 1–9 complete and Opus-gate-accepted — lexer/parser/
+checker, profile expansion, elaborator, canonical IR, deterministic
+8-node planner, prompt compiler, sexpr reader (models’ wire contract:
+`\n`/`\t`/`\r` interpreted on read; printer canonical), candidate
+firewall, recipe registry, sandboxed model runner with bounded repair,
+executable transition calculus with tri-state (`Holds`/`Fails`/
+`Unknown`) verification and the `indeterminate` status, content-
+addressed caching (library-only), assembly and promotion evidence
+bundles (six fail-closed checks; `hold`/`promote`), and the adequacy
+campaign with baseline-aware mutation detection (subject-bound,
+inapplicability-honest). 675+ tests across 31 binaries. Live synthesis
+validated end-to-end against a real model (12/12 candidates
+firewall-accepted first attempt; no test or CI step ever invokes a
+model).
+
+Process: each phase ran plan → committed-oracle Sonnet crew (oracle
+tests committed red before implementation; implementers may not touch
+them; integrator-only arbitration with in-file notes) → Opus phase
+gate (adversarial review + mutation-testing the oracles). Gate
+regression tests live in `rust/tests/gate*_regression_test.rs`.
 
 ```sh
 # Rust crate (run from rust/)
@@ -124,7 +146,13 @@ cargo build            # warnings are errors in CI
 cargo test             # full suite
 cargo fmt --all -- --check
 cargo run -- check ../examples/todo.gym
-cargo run -- ir ../examples/todo.gym   # canonical IR; byte-stable, CI-diffed
+cargo run -- ir ../examples/todo.gym       # canonical IR; byte-stable, CI-diffed
+cargo run -- plan ../examples/todo.gym     # 8-node synthesis DAG
+cargo run -- prompts ../examples/todo.gym  # compiled prompt packages
+cargo run -- verify ../examples/todo.gym   # verification bundle (golden-pinned)
+cargo run -- adequacy ../examples/todo.gym # mutation campaign (golden-pinned)
+cargo run -- compile ../examples/todo.gym /tmp/build   # + evidence-bundle.sexpr
+cargo run -- synthesize ../examples/todo.gym /tmp/out 3  # LIVE model; never in CI
 ```
 
 ## Compiler pipeline
@@ -190,7 +218,8 @@ cargo run -- ir ../examples/todo.gym   # canonical IR; byte-stable, CI-diffed
 
 ## Issue roadmap (dependency order)
 
-Issues #1–#10 are closed. Issues #12, #17, #23 remain open.
+Issues #1–#10 are closed; #17 is addressed by this document's
+current revision. Issues #12 and #23 remain open.
 
 | # | Title | Status |
 |---|-------|--------|
@@ -205,13 +234,26 @@ Issues #1–#10 are closed. Issues #12, #17, #23 remain open.
 | 9 | Assembly and promotion evidence bundles | Closed |
 | 10 | Adequacy campaign (mutation/concurrency/fault) | Closed |
 | 12 | North star architecture document | Open |
-| 17 | Update CLAUDE.md to match current codebase | Open |
+| 17 | Update CLAUDE.md to match current codebase | Addressed |
 | 23 | Benchmark for merges | Open |
 
 ## What is built
 
-The complete compiler pipeline from surface through assembly, with 178 tests
-across 7 test files and 10 example specifications:
+TWO implementations of the complete compiler pipeline:
+
+**Lamedh (reference)**: surface through assembly, with 178 tests across
+7 test files and 10 example specifications.
+
+**Rust (`rust/`, at full parity plus deliberate hardening deltas)**:
+675+ tests across 31 binaries, eight byte-stable goldens
+(ir/plan/prompts/verify/results/bundle/adequacy + reproducible compile
+trees), all CI-diffed. Verification is tri-state-honest (no vacuous
+passes, no fabricated failures), promotion is fail-closed, the
+adequacy campaign is subject-bound and reports the verifier’s real
+blind spots (todo.gym today: all five standard mutants survive —
+`pass nil` — because must-assertions are not yet evaluated).
+
+The Lamedh reference provides:
 
 - Surface capture and profile resolution
 - Closed-world elaboration with semantic IDs and fingerprinting
@@ -233,7 +275,15 @@ across 7 test files and 10 example specifications:
 
 ## What is not built
 
-- End-to-end generative execution (no LLM invoked in CI; runner infrastructure
-  exists but is not wired to a live model endpoint)
-- Cryptographic artifact hashing (FNV-1a placeholder; SHA-256 upgrade planned)
+- Acceptance `must`-assertion evaluation (the adequacy campaign’s
+  measured blind spot — the natural next verification phase)
+- Shared domain compilation units and gRPC/OpenAPI interop projections
+  (designed in `docs/shared-domains-design.md`, not implemented)
+- Cryptographic artifact hashing (FNV-1a placeholder; SHA-256 upgrade
+  planned — note: an unkeyed hash is drift evidence, not
+  authentication, and the upgrade alone will not change that)
+- Cache CLI wiring (cache.rs is library-only; any future hit path MUST
+  re-run the candidate firewall — the key covers the contract, not the
+  candidate’s conformance)
 - North star architecture document (issue #12)
+- Benchmark for merges (issue #23)

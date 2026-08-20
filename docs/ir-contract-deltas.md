@@ -535,9 +535,14 @@ the reference, pinned by `adequacy_oracle_test.rs`:
   stage)**: `adequacy FILE.gym` runs the standard five-mutant campaign
   over the elaborated IR; stdout is the canonical serialization of
   `(campaign-result ...)`, stderr diagnostics as in `verify`, exit 1
-  on parse/IR errors ONLY. A failing campaign (`pass nil`) is
-  evidence data, exit 0 — the same rationale as `hold` in the phase-8
-  evidence bundle. Pinned byte-for-byte by
+  on parse/IR errors OR any error-severity diagnostic in the
+  verification bundle — and in the refusal cases NO campaign is
+  emitted at all (see the phase-9 gate-fixes section: a campaign over
+  an unsound baseline is fabricated evidence; the campaign is a
+  judgment over verification, not a projection of the spec, so unlike
+  `verify`/`ir`/`plan` there is no artifact-first printing). A failing
+  campaign (`pass nil`) is evidence data, exit 0 — the same rationale
+  as `hold` in the phase-8 evidence bundle. Pinned byte-for-byte by
   `tests/fixtures/todo-adequacy.sexpr` and CI's reproducible-adequacy
   double-run diff.
 - Concurrency and fault scaffolding (`boundary_interleaving`,
