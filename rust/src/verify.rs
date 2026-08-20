@@ -512,16 +512,39 @@ fn execute_steps(execute: &Sexpr) -> Vec<Sexpr> {
     vec![execute.clone()]
 }
 
+/// Reads the `(step-index N)` field a trace violation carries (see
+/// `transition.rs`'s `with_step_index`). `None` for a violation without
+/// one or with a non-Int / out-of-range value.
+fn violation_step_index(violation: &Sexpr) -> Option<usize> {
+    let items = violation.as_list()?;
+    for entry in items.iter().skip(1) {
+        if let Some(pair) = entry.as_list() {
+            if pair.len() == 2 && pair[0].as_sym() == Some("step-index") {
+                return usize::try_from(pair[1].as_int()?).ok();
+            }
+        }
+    }
+    None
+}
+
 fn counterexamples_for_trace(trace: &Trace) -> Vec<Sexpr> {
-    let first = trace
-        .steps
-        .first()
-        .cloned()
-        .unwrap_or_else(default_trace_step);
+    // Phase-7 gate, finding 7: pair each violation with the step that
+    // actually produced it (via its step-index), not the trace's first
+    // step -- the reference's `(car steps)` pairing misattributes
+    // outcome/input/pre-state once traces are live. Fallback to the
+    // first step (then a default) only for a violation with no usable
+    // index, preserving totality.
     trace
         .violations
         .iter()
-        .map(|v| counterexample(v, &first))
+        .map(|v| {
+            let step = violation_step_index(v)
+                .and_then(|i| trace.steps.get(i))
+                .or_else(|| trace.steps.first())
+                .cloned()
+                .unwrap_or_else(default_trace_step);
+            counterexample(v, &step)
+        })
         .collect()
 }
 
@@ -735,13 +758,15 @@ fn basis_diagnostics(symbolic: bool, predicate: &Sexpr, ob_id: &str) -> Vec<Sexp
     if !symbolic {
         return vec![];
     }
+    // "symbolically-undecided", not "-satisfied" (phase-7 gate, finding
+    // 11): nothing was satisfied -- the verdict rests on a form the
+    // closed evaluator could not decide.
     vec![diag_sexpr(
         "info",
         "I601",
         (0, 0),
         format!(
-            "symbolically-satisfied: {} verdict for {} rests on an unevaluated predicate form ({})",
-            "the",
+            "symbolically-undecided: the verdict for {} rests on an unevaluated predicate form ({})",
             ob_id,
             predicate.print()
         ),
@@ -1225,6 +1250,56 @@ fn compile_verification_without_fingerprint(ir: &Ir) -> Sexpr {
 /// fingerprint-free form so the two can never drift, exactly the
 /// `Ir`/`Plan` discipline (plan section D; the delta doc's "no
 /// fingerprint field" note is superseded by this contract).
+/// Every ERROR-severity diagnostic message anywhere in a verification
+/// bundle: the bundle-level `diagnostics` (where E601 lands),
+/// `transition-diagnostics`, `environment-diagnostics`,
+/// `source-diagnostics`, and each result's own `diagnostics`. The CLI
+/// uses this to fail `verify` visibly on bundle-level errors (phase-7
+/// gate, finding 8). Total over any Sexpr; a malformed bundle yields
+/// an empty list rather than a panic.
+pub fn bundle_error_diagnostics(bundle: &Sexpr) -> Vec<String> {
+    fn errors_in(list: Option<&Sexpr>, out: &mut Vec<String>) {
+        let items = match list.and_then(|l| l.as_list()) {
+            Some(items) => items,
+            None => return,
+        };
+        for d in items {
+            let severity = d.assoc("severity").and_then(|s| s.as_sym());
+            if severity == Some("error") {
+                let msg = d
+                    .assoc("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("(no message)");
+                let code = d.assoc("code").and_then(|c| c.as_str()).unwrap_or("");
+                out.push(format!("{} {}", code, msg).trim().to_string());
+            }
+        }
+    }
+    // The bundle nests its field pairs one level down:
+    // `(verification-bundle ((k v) ...))` — unwrap before assoc.
+    let inner = match bundle.as_list() {
+        Some(items) if items.len() == 2 && items[0].as_sym() == Some("verification-bundle") => {
+            &items[1]
+        }
+        _ => bundle,
+    };
+    let mut out = Vec::new();
+    for key in [
+        "diagnostics",
+        "transition-diagnostics",
+        "environment-diagnostics",
+        "source-diagnostics",
+    ] {
+        errors_in(inner.assoc(key), &mut out);
+    }
+    if let Some(results) = inner.assoc("results").and_then(|r| r.as_list()) {
+        for r in results {
+            errors_in(r.assoc("diagnostics"), &mut out);
+        }
+    }
+    out
+}
+
 pub fn compile_verification(ir: &Ir) -> Sexpr {
     let base = compile_verification_without_fingerprint(ir);
     let fp = fingerprint::fingerprint(&base);

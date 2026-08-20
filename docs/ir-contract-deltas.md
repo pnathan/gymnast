@@ -116,7 +116,7 @@ These were bugs found in review and fixed to match what `verify.lisp` /
 - `verification-result` carries a `basis` field on invariant results —
   `checked` when every evaluation branch was computed, `symbolic` when
   any permissive default participated — plus an `I601
-  symbolically-satisfied` info diagnostic on symbolic verdicts. The
+  symbolically-undecided` info diagnostic on symbolic verdicts. The
   reference has neither; without them a vacuous pass is
   indistinguishable from a real one (phase-6 gate, finding 1). Phase 7
   keeps this field and extends its meaning; see below.
@@ -167,7 +167,7 @@ record (findings 1, 4, and 5).
   default could still produce a `passed`/`failed` verdict with
   `basis symbolic` — the phase-6 gate's findings 1 and 4). An
   `indeterminate` result carries no counterexample (same empty-list
-  shape as `passed`) and the same `I601 symbolically-satisfied`
+  shape as `passed`) and the same `I601 symbolically-undecided`
   diagnostic phase 6 attached to a symbolic verdict.
 - **Operation matching** in `execute_trace` is now the SUFFIX rule: a
   step op `s` matches a transition operation `op` when `op == s` OR
@@ -284,3 +284,58 @@ are pinned by `cache_oracle_test.rs` alone, not a fixture file.
   on read is worse than an outright miss). `RunResult`'s `candidate`
   field remains the sole optional one, present iff `Some` — unchanged
   from phase 5.
+
+## Phase-7 gate fixes (verdict honesty in live traces)
+
+All deliberate deltas, each motivated by a phase-7 gate finding and
+pinned by `gate7_regression_test.rs`:
+
+- **In-trace invariant checks are tri-state** (gate finding 1, the
+  blocker): `execute_trace` now checks invariants after each applied
+  step via `check_invariants3` (tri-state), not the boolean
+  `check_invariants` (which is retained verbatim for phase-6 parity and
+  its oracle). A grounded `Fails` is a violation exactly as before; an
+  `Unknown` invariant contributes no violation but marks that step
+  `symbolic`, so a property/scenario over the trace can never claim
+  `(basis checked)` while its invariant checks were undecided. The
+  reference (boolean `check-invariants` inside traces) can silently
+  launder an undecidable invariant into "held"; this port refuses to.
+- **`=` groundedness is qualified** (finding 2): in `eval_predicate3`,
+  a bare symbol that resolves through no binding (`eval_expr_resolved`
+  returns it unresolved) compared against a NON-symbol value yields
+  `Unknown` — `(= lost_updates 0)` over a state with no `lost_updates`
+  is a failed lookup, not a grounded `Fails`. Sym-vs-sym comparisons
+  stay grounded (enum-literal semantics), as do comparisons where the
+  unresolved side faces a symbol-valued resolved side. The boolean
+  evaluator is unchanged.
+- **Trace violations carry `(step-index N)`** and counterexamples pair
+  each violation with the step at that index (finding 7) — a deliberate
+  deviation from the reference's `(car steps)` pairing, which
+  misattributes outcome/input/pre-state once traces are live. A
+  violation with no usable index falls back to the first step.
+- **Ambiguous-operation violations carry `(candidate-transitions
+  (ids...))`** in addition to `candidates` (finding 10): two behaviors
+  may declare the same operation, making the ops indistinguishable; the
+  transition ids are the actionable identifiers.
+- **Empty operations never match** (finding 9): `matches_operation`
+  returns false when either side is empty — an empty-list step (op
+  `""`) or a transition with no `:on` (operation `""`) can otherwise
+  silently match and apply under `op == s` or the suffix rule.
+- **Strict runner readback rejects duplicate keys** (finding 6):
+  `Attempt::from_sexpr` / `RunResult::from_sexpr` return `None` when
+  any key repeats — a first-wins `assoc` and any last-wins reader
+  disagree about which value the record names (parser differential).
+- **`verify` exits nonzero on bundle-level error diagnostics**
+  (finding 8): `verify::bundle_error_diagnostics` collects
+  error-severity diagnostics from the bundle's `diagnostics`,
+  `transition-diagnostics`, `environment-diagnostics`,
+  `source-diagnostics`, and every result's diagnostics; the CLI prints
+  them to stderr and exits 1 (E601 is no longer invisible to
+  automation). Warnings (W406) and infos keep exit 0.
+- **I601 renamed** to `symbolically-undecided` (finding 11): nothing
+  was satisfied; the verdict rests on a form the closed evaluator could
+  not decide.
+- **Cache hits are lookups, never acceptances** (finding 12): recorded
+  in `cache.rs`'s module contract — any future wiring MUST re-run the
+  candidate firewall on every hit; the key covers the node contract,
+  not the candidate's conformance to it.

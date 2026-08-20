@@ -151,6 +151,7 @@ impl Attempt {
             return None;
         }
         let fields = outer[1].as_list()?;
+        let mut seen: Vec<&str> = Vec::new();
         for pair in fields {
             let kv = pair.as_list()?;
             if kv.len() != 2 {
@@ -160,6 +161,14 @@ impl Attempt {
             if !ATTEMPT_FIELDS.contains(&key) {
                 return None;
             }
+            // A repeated key is REJECTED (phase-7 gate, finding 6): a
+            // first-wins `assoc` and any last-wins reader disagree
+            // about which value the record names — silently keeping
+            // the first is a parser differential, not strictness.
+            if seen.contains(&key) {
+                return None;
+            }
+            seen.push(key);
         }
         let inner = &outer[1];
         let number = u32::try_from(inner.assoc("number")?.as_int()?).ok()?;
@@ -260,6 +269,7 @@ impl RunResult {
             return None;
         }
         let fields = outer[1].as_list()?;
+        let mut seen: Vec<&str> = Vec::new();
         for pair in fields {
             let kv = pair.as_list()?;
             if kv.len() != 2 {
@@ -269,6 +279,12 @@ impl RunResult {
             if !RUN_RESULT_FIELDS.contains(&key) {
                 return None;
             }
+            // Repeated keys REJECTED (phase-7 gate, finding 6) — same
+            // rationale as `Attempt::from_sexpr` above.
+            if seen.contains(&key) {
+                return None;
+            }
+            seen.push(key);
         }
         let inner = &outer[1];
         let node_id = inner.assoc("node-id")?.as_str()?.to_string();

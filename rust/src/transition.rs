@@ -304,8 +304,24 @@ pub fn eval_predicate3(
     };
     match items[0].as_sym() {
         Some("=") => {
-            let a = eval_expr(&nth_arg(items, 1), state, actor, input);
-            let b = eval_expr(&nth_arg(items, 2), state, actor, input);
+            // Groundedness qualification (phase-7 gate, finding 2): a
+            // bare symbol that resolves through no binding evaluates to
+            // itself, which is fine as an enum LITERAL but is a failed
+            // LOOKUP when compared against a non-symbol value --
+            // `(= lost_updates 0)` over a state with no `lost_updates`
+            // entry must be `Unknown`, not a fabricated grounded
+            // `Fails`. Sym-vs-sym comparison stays grounded (enum
+            // literal semantics); a resolved value on either side
+            // compared against anything non-floating stays grounded.
+            let (a, a_resolved) = eval_expr_resolved(&nth_arg(items, 1), state, actor, input);
+            let (b, b_resolved) = eval_expr_resolved(&nth_arg(items, 2), state, actor, input);
+            let a_floating = !a_resolved;
+            let b_floating = !b_resolved;
+            if (a_floating && !matches!(b, Sexpr::Sym(_)))
+                || (b_floating && !matches!(a, Sexpr::Sym(_)))
+            {
+                return Verdict::Unknown;
+            }
             if a == b {
                 Verdict::Holds
             } else {
@@ -501,6 +517,29 @@ pub fn eval_expr(
         },
         Sexpr::List(_) => expr.clone(),
     }
+}
+
+/// `eval_expr` plus a resolution flag: `false` iff the expression was a
+/// bare symbol that resolved through NO binding (not a special head,
+/// not a state entry) and therefore evaluated to itself. Every other
+/// case -- literals, special heads, successful state lookups, lists --
+/// is `true`. The tri-state `=` uses this to distinguish an enum
+/// literal from a failed lookup (phase-7 gate, finding 2); the boolean
+/// evaluator's behavior is deliberately unchanged.
+pub fn eval_expr_resolved(
+    expr: &Sexpr,
+    state: &State,
+    actor: Option<&Sexpr>,
+    input: Option<&Sexpr>,
+) -> (Sexpr, bool) {
+    if let Sexpr::Sym(s) = expr {
+        if !matches!(s.as_str(), "pre" | "post" | "actor" | "input" | "result")
+            && state_lookup(state, s).is_none()
+        {
+            return (expr.clone(), false);
+        }
+    }
+    (eval_expr(expr, state, actor, input), true)
 }
 
 // -----------------------------------------------------------------------
@@ -723,7 +762,7 @@ fn no_matching_transition_violation(op: &str) -> Sexpr {
     ])
 }
 
-fn ambiguous_operation_violation(op: &str, candidates: &[&str]) -> Sexpr {
+fn ambiguous_operation_violation(op: &str, candidates: &[&str], transition_ids: &[&str]) -> Sexpr {
     Sexpr::List(vec![
         Sexpr::sym("violation"),
         Sexpr::List(vec![Sexpr::sym("type"), Sexpr::sym("ambiguous-operation")]),
@@ -732,7 +771,37 @@ fn ambiguous_operation_violation(op: &str, candidates: &[&str]) -> Sexpr {
             Sexpr::sym("candidates"),
             Sexpr::List(candidates.iter().map(|c| Sexpr::sym(c)).collect()),
         ]),
+        // Two behaviors may declare the SAME operation, making the
+        // `candidates` ops indistinguishable; the transition ids are
+        // the actionable identifiers (phase-7 gate, finding 10).
+        // Additive field: `candidates` keeps the plan-section-B shape.
+        Sexpr::List(vec![
+            Sexpr::sym("candidate-transitions"),
+            Sexpr::List(
+                transition_ids
+                    .iter()
+                    .map(|c| Sexpr::Str(c.to_string()))
+                    .collect(),
+            ),
+        ]),
     ])
+}
+
+/// Appends `(step-index N)` to a violation form, tying it to the trace
+/// step that produced it, so counterexamples pair each violation with
+/// the CORRECT step instead of the trace's first (phase-7 gate, finding
+/// 7; documented delta from the reference's `(car steps)` pairing).
+fn with_step_index(violation: Sexpr, index: usize) -> Sexpr {
+    match violation {
+        Sexpr::List(mut items) => {
+            items.push(Sexpr::List(vec![
+                Sexpr::sym("step-index"),
+                Sexpr::Int(index as i64),
+            ]));
+            Sexpr::List(items)
+        }
+        other => other,
+    }
 }
 
 /// A step op `s` matches a transition operation `op` when `op == s` OR
@@ -740,7 +809,15 @@ fn ambiguous_operation_violation(op: &str, candidates: &[&str]) -> Sexpr {
 /// a bare helper name like `create_task` uniquely reaches a
 /// slash-qualified operation like `todo_service/create_task`, making the
 /// previously-dead trace machinery live for `.gym`'s actual syntax.
+/// An EMPTY step op or transition operation never participates in
+/// matching (phase-7 gate, finding 9): an empty-list step parses to op
+/// `""`, and a transition with no `:on` extracts operation `""` — under
+/// the plain rules `"" == ""` and `"svc/".ends_with("/" + "")` would
+/// both match, silently applying a transition the step never named.
 fn matches_operation(op: &str, s: &str) -> bool {
+    if op.is_empty() || s.is_empty() {
+        return false;
+    }
     op == s
         || (op.len() > s.len() && op.ends_with(s) && op.as_bytes()[op.len() - s.len() - 1] == b'/')
 }
@@ -763,7 +840,7 @@ pub fn execute_trace(ir: &Ir, steps: &[Sexpr]) -> Trace {
     let mut trace_steps = Vec::with_capacity(steps.len().min(TRACE_BOUND));
     let mut violations = Vec::new();
 
-    for step in steps.iter().take(TRACE_BOUND) {
+    for (index, step) in steps.iter().take(TRACE_BOUND).enumerate() {
         let (op, actor, input) = parse_step(step);
         let matched: Vec<&Transition> = transitions
             .iter()
@@ -784,17 +861,37 @@ pub fn execute_trace(ir: &Ir, steps: &[Sexpr]) -> Trace {
                     ]),
                     symbolic: false,
                 });
-                violations.push(no_matching_transition_violation(&op));
+                violations.push(with_step_index(
+                    no_matching_transition_violation(&op),
+                    index,
+                ));
             }
             1 => {
-                let step_result =
+                let mut step_result =
                     apply_transition(matched[0], &state, actor.as_ref(), input.as_ref());
                 state = step_result.post_state.clone();
-                violations.extend(check_invariants(ir, &state));
+                // Phase-7 gate BLOCKER (finding 1): in-trace invariant
+                // checks must use the TRI-STATE evaluator. A grounded
+                // `Fails` is a violation, exactly as before; an
+                // `Unknown` invariant contributes no violation but
+                // marks THIS step symbolic, so a property verdict over
+                // this trace can never claim `(basis checked)` while
+                // the invariants it was supposed to check were
+                // undecided.
+                let (inv_violations, any_undecided) = check_invariants3(ir, &state);
+                violations.extend(
+                    inv_violations
+                        .into_iter()
+                        .map(|v| with_step_index(v, index)),
+                );
+                if any_undecided {
+                    step_result.symbolic = true;
+                }
                 trace_steps.push(step_result);
             }
             _ => {
                 let candidates: Vec<&str> = matched.iter().map(|t| t.operation.as_str()).collect();
+                let transition_ids: Vec<&str> = matched.iter().map(|t| t.id.as_str()).collect();
                 trace_steps.push(TraceStep {
                     transition_id: "unknown".to_string(),
                     actor: actor.clone(),
@@ -805,7 +902,10 @@ pub fn execute_trace(ir: &Ir, steps: &[Sexpr]) -> Trace {
                     outcome: Sexpr::List(vec![Sexpr::sym("ambiguous-operation"), Sexpr::sym(&op)]),
                     symbolic: false,
                 });
-                violations.push(ambiguous_operation_violation(&op, &candidates));
+                violations.push(with_step_index(
+                    ambiguous_operation_violation(&op, &candidates, &transition_ids),
+                    index,
+                ));
             }
         }
     }
@@ -866,6 +966,36 @@ pub fn trace_to_sexpr(trace: &Trace) -> Sexpr {
 // -----------------------------------------------------------------------
 // Invariant checking and counterexamples.
 // -----------------------------------------------------------------------
+
+/// Tri-state invariant check (phase-7 gate, finding 1): one violation
+/// per invariant whose `:always` predicate is a grounded
+/// `Verdict::Fails` against `state`, plus a flag that is `true` iff ANY
+/// invariant's verdict was `Unknown` (undecided — neither a violation
+/// nor evidence of holding). `execute_trace` uses this so that a trace
+/// can never silently launder an undecidable invariant into "held";
+/// the boolean `check_invariants` below is preserved verbatim for
+/// phase-6 parity (its oracle pins the permissive-default behavior).
+pub fn check_invariants3(ir: &Ir, state: &State) -> (Vec<Sexpr>, bool) {
+    let mut violations = Vec::new();
+    let mut any_undecided = false;
+    for inv in ir.nodes_of_kind("invariant") {
+        let always = inv
+            .field(":always")
+            .cloned()
+            .unwrap_or_else(|| Sexpr::List(vec![]));
+        match eval_predicate3(&always, state, None, None) {
+            Verdict::Holds => {}
+            Verdict::Unknown => any_undecided = true,
+            Verdict::Fails => violations.push(Sexpr::List(vec![
+                Sexpr::sym("violation"),
+                Sexpr::List(vec![Sexpr::sym("invariant"), Sexpr::Str(inv.id.clone())]),
+                Sexpr::List(vec![Sexpr::sym("predicate"), always]),
+                Sexpr::List(vec![Sexpr::sym("state"), state_to_sexpr(state)]),
+            ])),
+        }
+    }
+    (violations, any_undecided)
+}
 
 /// One `(violation (invariant id) (predicate p) (state ...))` per
 /// `invariant` node whose `:always` predicate fails against `state`.

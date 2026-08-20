@@ -216,11 +216,23 @@ fn cmd_verify(src: &str, file_path: &str, _file_name: &str) {
     let bundle = verify::compile_verification(&ir);
     print!("{}", sexpr::canonical_serialize(&bundle));
 
-    std::process::exit(if parse_errors || ir.has_errors() {
-        1
-    } else {
-        0
-    });
+    // Phase-7 gate, finding 8: an error-severity diagnostic INSIDE the
+    // bundle (e.g. E601 duplicate-obligation-id, which has no IR-level
+    // error) must fail the command visibly — cache keys and assembly
+    // evidence depend on what these errors protect, and an exit-0 with
+    // empty stderr defeats them. Warnings (W406) and infos stay exit 0.
+    let bundle_error_messages = verify::bundle_error_diagnostics(&bundle);
+    for msg in &bundle_error_messages {
+        eprintln!("error: {}", msg);
+    }
+
+    std::process::exit(
+        if parse_errors || ir.has_errors() || !bundle_error_messages.is_empty() {
+            1
+        } else {
+            0
+        },
+    );
 }
 
 /// Handle the `plan` subcommand: parse, elaborate, plan; stdout is the

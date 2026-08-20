@@ -19,6 +19,16 @@
 //! already visited (`transitive_dependents`'s BFS visits each of
 //! `plan.nodes.len()` ids at most once); no recursion, no panics on any
 //! input this module's own public API can receive.
+//!
+//! SECURITY CONTRACT for future wiring (phase-7 gate, finding 12): a
+//! cache key covers the node CONTRACT (contract fingerprint, IR-slice
+//! fingerprint, dependency fingerprints) — it does NOT attest that the
+//! stored candidate conforms to that contract. `cache_store_result`
+//! stores whatever it is handed, and a `cache-hit` returns it verbatim.
+//! Any consumer that wires this cache into compile/synthesize MUST
+//! re-run `candidate::validate` (the firewall) on every cache hit
+//! before using the candidate; a hit is a lookup, never an acceptance.
+//! The firewall remains the sole acceptance authority.
 
 use crate::fingerprint;
 use crate::ir::{resolve_ir_slice, Ir};
