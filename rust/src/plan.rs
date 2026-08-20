@@ -274,6 +274,14 @@ impl Plan {
             other => other,
         }
     }
+
+    /// The plan node with the given id, if any (phase-5 fold-in scope
+    /// item 1a: the runner looks a node up by id rather than re-deriving
+    /// it, so it can never construct a plan node the planner itself did
+    /// not build).
+    pub fn node(&self, id: &str) -> Option<&PlanNode> {
+        self.nodes.iter().find(|n| n.id == id)
+    }
 }
 
 const PLAN_SCHEMA: &str = "gymnast.plan/0.1";
@@ -924,6 +932,16 @@ mod tests {
             a.inputs,
             vec!["m/type/A".to_string(), "m/type/B".to_string()]
         );
+    }
+
+    #[test]
+    fn test_plan_node_hit_and_miss() {
+        let ir = minimal_ir();
+        let p = plan(&ir);
+        let hit = p.node("m/plan/transition-kernel");
+        assert!(hit.is_some());
+        assert_eq!(hit.unwrap().id, "m/plan/transition-kernel");
+        assert!(p.node("m/plan/does-not-exist").is_none());
     }
 
     #[test]

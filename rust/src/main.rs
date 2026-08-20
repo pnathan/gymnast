@@ -2,16 +2,17 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use gymnast_rs::candidate::Candidate;
+use gymnast_rs::candidate::{is_unsafe_output_path, Candidate};
 use gymnast_rs::diag::{self, Severity};
 use gymnast_rs::elaborate;
 use gymnast_rs::parser;
 use gymnast_rs::plan;
 use gymnast_rs::prompt;
 use gymnast_rs::recipe;
-use gymnast_rs::sexpr;
+use gymnast_rs::runner;
+use gymnast_rs::sexpr::{self, Sexpr};
 
-const USAGE: &str = "usage: gymnast-rs <parse|check|ir|plan|prompts> FILE.gym\n       gymnast-rs compile FILE.gym OUT_DIR";
+const USAGE: &str = "usage: gymnast-rs <parse|check|ir|plan|prompts> FILE.gym\n       gymnast-rs compile FILE.gym OUT_DIR\n       gymnast-rs synthesize FILE.gym OUT_DIR [MAX_ATTEMPTS]";
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -35,6 +36,33 @@ fn main() {
         let out_dir = &args[3];
         let src = read_src_or_exit(file_path);
         cmd_compile(&src, file_path, out_dir);
+        return;
+    }
+
+    // `synthesize` takes FILE.gym, OUT_DIR, and an optional MAX_ATTEMPTS —
+    // dispatched before the shared `FILE.gym`-only arity check below for
+    // the same reason `compile` is. NOT exercised by CI (it invokes a
+    // live model via `ClaudeSubprocessProvider`); see
+    // `docs/rust-port-plan-phase5.md`, section C.
+    if command == "synthesize" {
+        if !(4..=5).contains(&args.len()) {
+            eprintln!("{}", USAGE);
+            std::process::exit(2);
+        }
+        let file_path = &args[2];
+        let out_dir = &args[3];
+        let max_attempts: u32 = match args.get(4) {
+            Some(raw) => match raw.parse() {
+                Ok(n) => n,
+                Err(_) => {
+                    eprintln!("error: MAX_ATTEMPTS must be a non-negative integer");
+                    std::process::exit(2);
+                }
+            },
+            None => 3,
+        };
+        let src = read_src_or_exit(file_path);
+        cmd_synthesize(&src, file_path, out_dir, max_attempts);
         return;
     }
 
@@ -256,6 +284,11 @@ fn cmd_prompts(src: &str, file_path: &str, _file_name: &str) {
         eprintln!("{}[{}]: {}", severity, code, message);
     }
 
+    // Phase-5 fold-in scope item 1d: `compile_prompt`'s own return shape
+    // never carries an unresolved-input warning (the goldens are pinned
+    // byte-for-byte), so the CLI — the caller — surfaces them itself.
+    report_prompt_ir_slice_warnings(&ir, &p);
+
     let packages = prompt::compile_prompts(&ir, &p);
     let wrapper = sexpr::Sexpr::list(vec![
         sexpr::Sexpr::sym("prompts"),
@@ -268,6 +301,24 @@ fn cmd_prompts(src: &str, file_path: &str, _file_name: &str) {
     } else {
         0
     });
+}
+
+/// Reports every plan node's `W405 unresolved-input` prompt-side warning
+/// to stderr (phase-5 fold-in scope item 1d) in plan order. A warning
+/// never affects the exit code (W405 is warning-severity); `todo.gym`
+/// has none anywhere in its plan, so this prints nothing for it.
+fn report_prompt_ir_slice_warnings(ir: &gymnast_rs::ir::Ir, p: &plan::Plan) {
+    for node in &p.nodes {
+        for d in prompt::prompt_ir_slice_warnings(ir, node) {
+            let severity = d
+                .assoc("severity")
+                .and_then(|s| s.as_sym())
+                .unwrap_or("warning");
+            let code = d.assoc("code").and_then(|s| s.as_str()).unwrap_or("");
+            let message = d.assoc("message").and_then(|s| s.as_str()).unwrap_or("");
+            eprintln!("{}[{}]: {}", severity, code, message);
+        }
+    }
 }
 
 /// Handle the `compile` subcommand: parse, elaborate, plan, compile
@@ -318,6 +369,8 @@ fn cmd_compile(src: &str, file_path: &str, out_dir: &str) {
         let message = d.assoc("message").and_then(|s| s.as_str()).unwrap_or("");
         eprintln!("{}[{}]: {}", severity, code, message);
     }
+
+    report_prompt_ir_slice_warnings(&ir, &p);
 
     let packages = prompt::compile_prompts(&ir, &p);
     let prompts_wrapper = sexpr::Sexpr::list(vec![
@@ -385,38 +438,8 @@ fn cmd_compile(src: &str, file_path: &str, out_dir: &str) {
             Some(c) => c.clone(),
             None => continue,
         };
-        let candidate = match Candidate::from_sexpr(candidate_sexpr) {
-            Some(c) => c,
-            // A succeeded result whose candidate does not even parse back
-            // is unreachable in practice (the firewall already required
-            // it to parse to reach Succeeded), but `compile` must never
-            // panic on it either way.
-            None => continue,
-        };
-        for (path, content) in candidate.files() {
-            if is_unsafe_output_path(&path) {
-                eprintln!(
-                    "error[E511]: unsafe-output-path: candidate for {} names an unsafe path, \
-                     skipped: {}",
-                    result.node_id, path
-                );
-                execution_errors = true;
-                continue;
-            }
-            let dest = out_path.join(&path);
-            if let Some(parent) = dest.parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    eprintln!(
-                        "error: cannot create directory for {}: {}",
-                        dest.display(),
-                        e
-                    );
-                    continue;
-                }
-            }
-            if let Err(e) = fs::write(&dest, content) {
-                eprintln!("error: cannot write {}: {}", dest.display(), e);
-            }
+        if write_candidate_files(out_path, &result.node_id, candidate_sexpr) {
+            execution_errors = true;
         }
     }
 
@@ -429,13 +452,209 @@ fn cmd_compile(src: &str, file_path: &str, out_dir: &str) {
     );
 }
 
-/// Rejects any path containing `..` or starting with `/` (plan section D,
-/// `E511 unsafe-output-path`): the candidate firewall already constrains
-/// `files` paths to the node's `may_write` contract, but the filesystem
-/// write is the last line of defense against an escaping path reaching
-/// outside `out_dir`.
-fn is_unsafe_output_path(path: &str) -> bool {
-    path.starts_with('/') || path.contains("..")
+/// Writes every `(path, content)` file claim of one candidate under
+/// `out_dir`, applying the same E511 guard `compile` always has (now the
+/// library's `is_unsafe_output_path`, phase-5 fold-in scope item 1e):
+/// an unsafe path is reported and skipped rather than written. Shared by
+/// `cmd_compile` (deterministic-recipe candidates) and `cmd_synthesize`
+/// (both deterministic AND model-run candidates), so the two write paths
+/// can never disagree about what counts as a safe destination. Returns
+/// `true` iff at least one path was rejected as unsafe.
+fn write_candidate_files(out_path: &Path, node_id: &str, candidate_sexpr: Sexpr) -> bool {
+    let candidate = match Candidate::from_sexpr(candidate_sexpr) {
+        Some(c) => c,
+        // A succeeded/accepted result whose candidate does not even parse
+        // back is unreachable in practice (the firewall already required
+        // it to parse to reach that status), but this must never panic on
+        // it either way.
+        None => return false,
+    };
+    let mut had_unsafe_path = false;
+    for (path, content) in candidate.files() {
+        if is_unsafe_output_path(&path) {
+            eprintln!(
+                "error[E511]: unsafe-output-path: candidate for {} names an unsafe path, \
+                 skipped: {}",
+                node_id, path
+            );
+            had_unsafe_path = true;
+            continue;
+        }
+        let dest = out_path.join(&path);
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!(
+                    "error: cannot create directory for {}: {}",
+                    dest.display(),
+                    e
+                );
+                continue;
+            }
+        }
+        if let Err(e) = fs::write(&dest, content) {
+            eprintln!("error: cannot write {}: {}", dest.display(), e);
+        }
+    }
+    had_unsafe_path
+}
+
+/// Handle the `synthesize` subcommand: the same front-half pipeline as
+/// `compile` (parse, elaborate, plan, prompts, deterministic recipe
+/// execution — writing the same four artifacts and every succeeded
+/// deterministic candidate's files), PLUS running every generative plan
+/// node through `runner::run_generative_nodes` with a live
+/// `ClaudeSubprocessProvider`, writing `run-results.sexpr` (`(run-results
+/// ((run-result ...) ...))`) and the files of every SUCCEEDED run
+/// candidate through the same `write_candidate_files` E511 guard. Exit 1
+/// if any compile-stage error exists OR any run result is `Exhausted`.
+///
+/// NOT exercised by CI or any test in this crate: it is the one path in
+/// this codebase that invokes a live model subprocess.
+fn cmd_synthesize(src: &str, file_path: &str, out_dir: &str, max_attempts: u32) {
+    let (ast, parse_diags) = parser::parse(src);
+
+    if !parse_diags.is_empty() {
+        eprint!("{}", diag::render(&parse_diags, src, file_path));
+    }
+    let parse_errors = parse_diags.iter().any(|d| d.severity == Severity::Error);
+
+    let file = match ast {
+        Some(file) => file,
+        None => std::process::exit(1),
+    };
+
+    let (ir, all_diags) = elaborate::elaborate_with_parse_diags(&file, &parse_diags);
+    let later_diags = &all_diags[parse_diags.len()..];
+    if !later_diags.is_empty() {
+        eprint!("{}", diag::render(later_diags, src, file_path));
+    }
+
+    let p = plan::plan(&ir);
+
+    let plan_has_errors = p.diagnostics.iter().any(|d| {
+        d.assoc("severity")
+            .and_then(|s| s.as_sym())
+            .map(|s| s == "error")
+            .unwrap_or(false)
+    });
+    for d in &p.diagnostics {
+        let severity = d
+            .assoc("severity")
+            .and_then(|s| s.as_sym())
+            .unwrap_or("error");
+        let code = d.assoc("code").and_then(|s| s.as_str()).unwrap_or("");
+        let message = d.assoc("message").and_then(|s| s.as_str()).unwrap_or("");
+        eprintln!("{}[{}]: {}", severity, code, message);
+    }
+
+    report_prompt_ir_slice_warnings(&ir, &p);
+
+    let packages = prompt::compile_prompts(&ir, &p);
+    let prompts_wrapper = Sexpr::list(vec![
+        Sexpr::sym("prompts"),
+        Sexpr::list(packages.iter().map(|pk| pk.to_sexpr()).collect()),
+    ]);
+
+    let results = recipe::execute_deterministic(&ir, &p);
+    let results_wrapper = Sexpr::list(vec![
+        Sexpr::sym("results"),
+        Sexpr::list(results.iter().map(|r| r.to_sexpr()).collect()),
+    ]);
+
+    let out_path = Path::new(out_dir);
+    if let Err(e) = fs::create_dir_all(out_path) {
+        eprintln!("error: cannot create output directory {}: {}", out_dir, e);
+        std::process::exit(2);
+    }
+
+    write_artifact(
+        out_path,
+        "ir.sexpr",
+        &sexpr::canonical_serialize(&ir.to_sexpr()),
+    );
+    write_artifact(
+        out_path,
+        "plan.sexpr",
+        &sexpr::canonical_serialize(&p.to_sexpr()),
+    );
+    write_artifact(
+        out_path,
+        "prompts.sexpr",
+        &sexpr::canonical_serialize(&prompts_wrapper),
+    );
+    write_artifact(
+        out_path,
+        "results.sexpr",
+        &sexpr::canonical_serialize(&results_wrapper),
+    );
+
+    let mut execution_errors = false;
+    for result in &results {
+        for d in &result.diagnostics {
+            let severity = d
+                .assoc("severity")
+                .and_then(|s| s.as_sym())
+                .unwrap_or("error");
+            if severity == "error" {
+                execution_errors = true;
+            }
+            let code = d.assoc("code").and_then(|s| s.as_str()).unwrap_or("");
+            let message = d.assoc("message").and_then(|s| s.as_str()).unwrap_or("");
+            eprintln!("{}[{}]: {}", severity, code, message);
+        }
+    }
+
+    for result in &results {
+        if result.status != recipe::ExecutionStatus::Succeeded {
+            continue;
+        }
+        let candidate_sexpr = match &result.candidate {
+            Some(c) => c.clone(),
+            None => continue,
+        };
+        if write_candidate_files(out_path, &result.node_id, candidate_sexpr) {
+            execution_errors = true;
+        }
+    }
+
+    // The generative half: every generative plan node through the live
+    // Claude subprocess, bounded repair per node.
+    let mut provider = runner::ClaudeSubprocessProvider::new();
+    let run_results = runner::run_generative_nodes(&ir, &p, &mut provider, max_attempts);
+    let run_results_wrapper = Sexpr::list(vec![
+        Sexpr::sym("run-results"),
+        Sexpr::list(run_results.iter().map(|r| r.to_sexpr()).collect()),
+    ]);
+    write_artifact(
+        out_path,
+        "run-results.sexpr",
+        &sexpr::canonical_serialize(&run_results_wrapper),
+    );
+
+    let mut run_exhausted = false;
+    for result in &run_results {
+        if result.status == runner::RunStatus::Exhausted {
+            run_exhausted = true;
+            eprintln!(
+                "error: generative node {} exhausted its synthesis attempts",
+                result.node_id
+            );
+            continue;
+        }
+        if let Some(candidate_sexpr) = result.candidate.clone() {
+            if write_candidate_files(out_path, &result.node_id, candidate_sexpr) {
+                execution_errors = true;
+            }
+        }
+    }
+
+    std::process::exit(
+        if parse_errors || ir.has_errors() || plan_has_errors || execution_errors || run_exhausted {
+            1
+        } else {
+            0
+        },
+    );
 }
 
 /// Writes one top-level compilation artifact (`ir.sexpr`, `plan.sexpr`,

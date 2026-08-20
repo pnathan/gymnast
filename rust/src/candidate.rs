@@ -34,24 +34,142 @@ pub struct Candidate {
     pub sexpr: Sexpr,
 }
 
+/// Shape check for the untrusted `(candidate (...))` tagged-alist
+/// convention, BORROWING `v` rather than taking ownership of it: a
+/// two-element list headed by the bare symbol `candidate`, whose second
+/// element is itself a list (the field-pairs body) — the nested-alist
+/// convention `docs/ir-contract-deltas.md` uses throughout the Rust IR
+/// ("every alist is one nested list"), the same shape `prompt.rs`'s
+/// `OUTPUT PROTOCOL` projection already uses. `None` for anything else
+/// (wrong tag, wrong arity, non-list body, or a bare symbol/string/int).
+///
+/// This is the single validation both `Candidate::from_sexpr` (which
+/// then takes ownership) and `candidate_diagnostics` (which never needs
+/// to own the candidate at all — phase-5 fold-in scope item 1h) share,
+/// so the two can never disagree about what counts as candidate-shaped.
+fn candidate_shape(v: &Sexpr) -> Option<&Sexpr> {
+    let items = v.as_list()?;
+    if items.len() != 2 {
+        return None;
+    }
+    if items[0].as_sym() != Some("candidate") {
+        return None;
+    }
+    let body = &items[1];
+    body.as_list()?;
+    Some(body)
+}
+
+fn field<'a>(body: &'a Sexpr, key: &str) -> Option<&'a Sexpr> {
+    body.assoc(key)
+}
+
+fn node_id_of(body: &Sexpr) -> Option<&str> {
+    field(body, "node-id").and_then(|v| v.as_str())
+}
+
+/// Every path claim in the `files` field, WELL-FORMED OR NOT: for a
+/// conforming `(string string)` pair the path; for an off-shape entry
+/// whose first element is still a string, that string (it is a path
+/// claim and must face E503/E504 like any other — the Lamedh reference
+/// takes the car of every entry). Paired with the list of malformed
+/// entries for E512. The firewall must never be lossier than the
+/// reference.
+fn file_entries_audit_of(body: &Sexpr) -> (Vec<String>, Vec<Sexpr>) {
+    let mut paths = Vec::new();
+    let mut malformed = Vec::new();
+    if let Some(entries) = field(body, "files").and_then(|v| v.as_list()) {
+        for entry in entries {
+            match entry.as_list() {
+                Some(pair)
+                    if pair.len() == 2
+                        && pair[0].as_str().is_some()
+                        && pair[1].as_str().is_some() =>
+                {
+                    paths.push(pair[0].as_str().unwrap_or_default().to_string());
+                }
+                Some(pair) => {
+                    if let Some(path) = pair.first().and_then(|p| p.as_str()) {
+                        paths.push(path.to_string());
+                    }
+                    malformed.push(entry.clone());
+                }
+                None => malformed.push(entry.clone()),
+            }
+        }
+    }
+    (paths, malformed)
+}
+
+/// Raw entries of a vocabulary-list field that are neither strings nor
+/// symbols — malformed under the candidate protocol (E512).
+fn malformed_vocab_entries_of(body: &Sexpr, key: &str) -> Vec<Sexpr> {
+    field(body, key)
+        .and_then(|v| v.as_list())
+        .map(|items| {
+            items
+                .iter()
+                .filter(|s| sexpr_as_vocab_string(s).is_none())
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `(path, content)` pairs from the `files` field, in list order.
+/// Entries that are not a two-element `(string string)` pair are skipped
+/// here (the WRITE side); the firewall separately audits them via
+/// `file_entries_audit_of` so a malformed entry is always a diagnostic,
+/// never silence.
+fn files_of(body: &Sexpr) -> Vec<(String, String)> {
+    field(body, "files")
+        .and_then(|v| v.as_list())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let pair = entry.as_list()?;
+                    if pair.len() != 2 {
+                        return None;
+                    }
+                    let path = pair[0].as_str()?;
+                    let content = pair[1].as_str()?;
+                    Some((path.to_string(), content.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A vocabulary-term list field: entries may print as either a quoted
+/// string (e.g. `implements`, which carries IR node ids) or a bare
+/// symbol (e.g. `edge-uses`, which carries capability names) — both are
+/// accepted so the accessor stays total over either encoding a candidate
+/// might use.
+fn string_list_of(body: &Sexpr, key: &str) -> Vec<String> {
+    field(body, key)
+        .and_then(|v| v.as_list())
+        .map(|items| items.iter().filter_map(sexpr_as_vocab_string).collect())
+        .unwrap_or_default()
+}
+
+/// `true` when `assumptions` is absent or nil (the empty list) — the
+/// "no added assumptions" condition E505 checks the negation of.
+fn assumptions_empty_of(body: &Sexpr) -> bool {
+    is_nil_or_absent(field(body, "assumptions"))
+}
+
+/// `true` when `unresolved` is absent or nil — the "no unresolved
+/// contract" condition E506 checks the negation of.
+fn unresolved_empty_of(body: &Sexpr) -> bool {
+    is_nil_or_absent(field(body, "unresolved"))
+}
+
 impl Candidate {
-    /// `Some(_)` iff `v` is exactly a `(candidate (...))` tagged alist:
-    /// a two-element list headed by the bare symbol `candidate`, whose
-    /// second element is itself a list (the field-pairs body) — the
-    /// nested-alist convention `docs/ir-contract-deltas.md` uses
-    /// throughout the Rust IR ("every alist is one nested list"), the
-    /// same shape `prompt.rs`'s `OUTPUT PROTOCOL` projection already
-    /// uses. Anything else (wrong tag, wrong arity, non-list body, or a
-    /// bare symbol/string/int) is `None`.
+    /// `Some(_)` iff `v` is exactly a `(candidate (...))` tagged alist.
+    /// See `candidate_shape` for the exact rule.
     pub fn from_sexpr(v: Sexpr) -> Option<Candidate> {
-        let items = v.as_list()?;
-        if items.len() != 2 {
-            return None;
-        }
-        if items[0].as_sym() != Some("candidate") {
-            return None;
-        }
-        items[1].as_list()?;
+        candidate_shape(&v)?;
         Some(Candidate { sexpr: v })
     }
 
@@ -59,120 +177,46 @@ impl Candidate {
     /// `sexpr` has that shape. `None` for a malformed/hand-built value —
     /// every accessor below treats that as "no fields", never a panic.
     fn body(&self) -> Option<&Sexpr> {
-        self.sexpr.as_list().and_then(|items| items.get(1))
-    }
-
-    fn field(&self, key: &str) -> Option<&Sexpr> {
-        self.body()?.assoc(key)
+        candidate_shape(&self.sexpr)
     }
 
     pub fn node_id(&self) -> Option<&str> {
-        self.field("node-id").and_then(|v| v.as_str())
+        self.body().and_then(node_id_of)
     }
 
-    /// Every path claim in the `files` field, WELL-FORMED OR NOT: for a
-    /// conforming `(string string)` pair the path; for an off-shape
-    /// entry whose first element is still a string, that string (it is
-    /// a path claim and must face E503/E504 like any other — the Lamedh
-    /// reference takes the car of every entry). Paired with the list of
-    /// malformed entries for E512. The firewall must never be lossier
-    /// than the reference.
+    /// Every path claim in the `files` field, WELL-FORMED OR NOT. See
+    /// `file_entries_audit_of`.
     pub fn file_entries_audit(&self) -> (Vec<String>, Vec<Sexpr>) {
-        let mut paths = Vec::new();
-        let mut malformed = Vec::new();
-        if let Some(entries) = self.field("files").and_then(|v| v.as_list()) {
-            for entry in entries {
-                match entry.as_list() {
-                    Some(pair)
-                        if pair.len() == 2
-                            && pair[0].as_str().is_some()
-                            && pair[1].as_str().is_some() =>
-                    {
-                        paths.push(pair[0].as_str().unwrap_or_default().to_string());
-                    }
-                    Some(pair) => {
-                        if let Some(path) = pair.first().and_then(|p| p.as_str()) {
-                            paths.push(path.to_string());
-                        }
-                        malformed.push(entry.clone());
-                    }
-                    None => malformed.push(entry.clone()),
-                }
-            }
-        }
-        (paths, malformed)
-    }
-
-    /// Raw entries of a vocabulary-list field that are neither strings
-    /// nor symbols — malformed under the candidate protocol (E512).
-    fn malformed_vocab_entries(&self, key: &str) -> Vec<Sexpr> {
-        self.field(key)
-            .and_then(|v| v.as_list())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter(|s| sexpr_as_vocab_string(s).is_none())
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.body().map(file_entries_audit_of).unwrap_or_default()
     }
 
     /// `(path, content)` pairs from the `files` field, in list order.
-    /// Entries that are not a two-element `(string string)` pair are
-    /// skipped here (the WRITE side); the firewall separately audits
-    /// them via `file_entries_audit` so a malformed entry is always a
-    /// diagnostic, never silence.
     pub fn files(&self) -> Vec<(String, String)> {
-        self.field("files")
-            .and_then(|v| v.as_list())
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter_map(|entry| {
-                        let pair = entry.as_list()?;
-                        if pair.len() != 2 {
-                            return None;
-                        }
-                        let path = pair[0].as_str()?;
-                        let content = pair[1].as_str()?;
-                        Some((path.to_string(), content.to_string()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.body().map(files_of).unwrap_or_default()
     }
 
     pub fn implements(&self) -> Vec<String> {
-        self.string_list("implements")
+        self.body()
+            .map(|b| string_list_of(b, "implements"))
+            .unwrap_or_default()
     }
 
     pub fn edge_uses(&self) -> Vec<String> {
-        self.string_list("edge-uses")
-    }
-
-    /// A vocabulary-term list field: entries may print as either a
-    /// quoted string (e.g. `implements`, which carries IR node ids) or a
-    /// bare symbol (e.g. `edge-uses`, which carries capability names) —
-    /// both are accepted so the accessor stays total over either
-    /// encoding a candidate might use.
-    fn string_list(&self, key: &str) -> Vec<String> {
-        self.field(key)
-            .and_then(|v| v.as_list())
-            .map(|items| items.iter().filter_map(sexpr_as_vocab_string).collect())
+        self.body()
+            .map(|b| string_list_of(b, "edge-uses"))
             .unwrap_or_default()
     }
 
     /// `true` when `assumptions` is absent or nil (the empty list) — the
     /// "no added assumptions" condition E505 checks the negation of.
     pub fn assumptions_empty(&self) -> bool {
-        is_nil_or_absent(self.field("assumptions"))
+        self.body().map(assumptions_empty_of).unwrap_or(true)
     }
 
     /// `true` when `unresolved` is absent or nil — the "no unresolved
     /// contract" condition E506 checks the negation of.
     pub fn unresolved_empty(&self) -> bool {
-        is_nil_or_absent(self.field("unresolved"))
+        self.body().map(unresolved_empty_of).unwrap_or(true)
     }
 }
 
@@ -205,9 +249,15 @@ fn contains_lisp_marker(content: &str) -> bool {
 /// tagged alist, no further check runs and exactly one diagnostic (E501)
 /// is returned. Otherwise E502 through E508 all run and every applicable
 /// one fires (never short-circuiting each other).
+///
+/// Phase-5 fold-in scope item 1h: this function BORROWS `candidate`
+/// throughout and never clones it — a candidate can embed the full text
+/// of every generated file, and the firewall runs on every attempt of
+/// every node, so cloning the whole value just to validate its shape
+/// would duplicate that content on every check.
 pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
-    let c = match Candidate::from_sexpr(candidate.clone()) {
-        Some(c) => c,
+    let body = match candidate_shape(candidate) {
+        Some(body) => body,
         None => {
             return vec![diag_sexpr(
                 "error",
@@ -237,7 +287,8 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
     }
 
     // E502 candidate-node-mismatch.
-    if c.node_id() != Some(node.id.as_str()) {
+    let candidate_node_id = node_id_of(body);
+    if candidate_node_id != Some(node.id.as_str()) {
         diags.push(diag_sexpr(
             "error",
             "E502",
@@ -245,7 +296,7 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
             format!(
                 "candidate names a different plan node: expected {}, got {}",
                 node.id,
-                c.node_id().unwrap_or("<none>")
+                candidate_node_id.unwrap_or("<none>")
             ),
         ));
     }
@@ -253,7 +304,7 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
     // Path checks run over EVERY path claim, well-formed or not — the
     // Lamedh reference takes the car of every files entry, and the
     // firewall must never be lossier than the reference (fail closed).
-    let (claimed_paths, malformed_entries) = c.file_entries_audit();
+    let (claimed_paths, malformed_entries) = file_entries_audit_of(body);
 
     // E503 unauthorized-output-path: one per candidate file path not in
     // `node.may_write`.
@@ -271,7 +322,7 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
     // E504 missing-output-file: one per required `node.may_write` path
     // absent from the candidate's WELL-FORMED files (a malformed entry
     // cannot satisfy a required artifact).
-    let files = c.files();
+    let files = files_of(body);
     for allowed in &node.may_write {
         if !files.iter().any(|(path, _)| path == allowed) {
             diags.push(diag_sexpr(
@@ -287,10 +338,8 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
     // two-element (string string) pair, and every edge-uses entry that
     // is neither a string nor a symbol. Malformed input is a diagnostic,
     // never silence.
-    for entry in malformed_entries
-        .iter()
-        .chain(c.malformed_vocab_entries("edge-uses").iter())
-    {
+    let malformed_edge_uses = malformed_vocab_entries_of(body, "edge-uses");
+    for entry in malformed_entries.iter().chain(malformed_edge_uses.iter()) {
         diags.push(diag_sexpr(
             "error",
             "E512",
@@ -300,7 +349,7 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
     }
 
     // E505 candidate-added-assumptions.
-    if !c.assumptions_empty() {
+    if !assumptions_empty_of(body) {
         diags.push(diag_sexpr(
             "error",
             "E505",
@@ -310,7 +359,7 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
     }
 
     // E506 candidate-unresolved.
-    if !c.unresolved_empty() {
+    if !unresolved_empty_of(body) {
         diags.push(diag_sexpr(
             "error",
             "E506",
@@ -346,7 +395,7 @@ pub fn candidate_diagnostics(node: &PlanNode, candidate: &Sexpr) -> Vec<Sexpr> {
 
     // E508 undeclared-edge-use: one per `edge-uses` entry not in
     // `node.capabilities`.
-    for edge in c.edge_uses() {
+    for edge in string_list_of(body, "edge-uses") {
         if !node.capabilities.iter().any(|cap| cap == &edge) {
             diags.push(diag_sexpr(
                 "error",
@@ -376,6 +425,28 @@ pub fn candidate_valid(node: &PlanNode, candidate: &Sexpr) -> bool {
             .map(|s| s == "error")
             .unwrap_or(true)
     })
+}
+
+/// Rejects any path that starts with `/`, contains a literal backslash,
+/// or contains the two-character run `..` (phase-5 fold-in scope item
+/// 1e: moved here from `main.rs` — `E511 unsafe-output-path`). The
+/// candidate firewall above already constrains a candidate's `files`
+/// paths to the node's `may_write` contract, but the filesystem write
+/// `main.rs::cmd_compile` performs is the last line of defense against a
+/// path that would otherwise escape the output directory.
+///
+/// The `..`-substring rule deliberately OVER-REJECTS some safe paths
+/// (e.g. `a..b.rb`, which contains no real `..` path component) — kept
+/// exactly as it was in `main.rs`, since failing closed on an ambiguous
+/// path is preferable to a path-traversal false negative. It also
+/// subsumes the narrower "any path COMPONENT that IS exactly `..`" rule
+/// the phase-5 plan calls out: a component equal to `..` always,
+/// trivially, contains the substring `..`, so no separate component-wise
+/// check is needed to satisfy it. Backslash rejection is new in phase 5:
+/// a `\`-separated path could be reinterpreted as an escaping path by a
+/// Windows filesystem even where no `/../` component is present.
+pub fn is_unsafe_output_path(path: &str) -> bool {
+    path.starts_with('/') || path.contains("..") || path.contains('\\')
 }
 
 #[cfg(test)]
@@ -468,6 +539,21 @@ mod tests {
         let good = candidate("m/plan/x", &[("out/a.rb", "puts 1")]);
         assert!(candidate_diagnostics(&node, &good).is_empty());
         assert!(candidate_valid(&node, &good));
+    }
+
+    #[test]
+    fn test_is_unsafe_output_path_table() {
+        assert!(is_unsafe_output_path("../x"));
+        assert!(is_unsafe_output_path("/abs"));
+        assert!(is_unsafe_output_path("a/../b"));
+        // Documented over-rejection: the contains-based check flags any
+        // path whose bytes merely contain the two-character run "..",
+        // even where it is not a real ".." component.
+        assert!(is_unsafe_output_path("a..b.rb"));
+        // New in phase 5: backslash rejection.
+        assert!(is_unsafe_output_path("back\\slash"));
+        assert!(!is_unsafe_output_path("generated/design/contracts.rb"));
+        assert!(!is_unsafe_output_path("generated/adapters/schema.sexpr"));
     }
 }
 

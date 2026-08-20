@@ -16,7 +16,7 @@
 
 use crate::candidate::candidate_diagnostics;
 use crate::diag::diag_sexpr;
-use crate::ir::{Ir, IrNode};
+use crate::ir::{resolve_ir_slice, Ir, IrNode};
 use crate::plan::{target_language, Plan, PlanNode};
 use crate::sexpr::Sexpr;
 
@@ -146,31 +146,58 @@ impl ExecutionResult {
         ));
         Sexpr::list(vec![Sexpr::sym("execution-result"), Sexpr::list(items)])
     }
-}
 
-/// Resolves `node.inputs` against `ir`, in input order (already sorted at
-/// plan-construction time). An id that does not resolve is SKIPPED rather
-/// than panicking or silently vanishing: it emits a `W405
-/// unresolved-input` warning instead — the phase-3 gate's finding that a
-/// `filter_map` slice must never drop an id without a trace.
-fn resolve_ir_slice<'a>(ir: &'a Ir, node: &PlanNode) -> (Vec<&'a IrNode>, Vec<Sexpr>) {
-    let mut slice = Vec::new();
-    let mut warnings = Vec::new();
-    for id in &node.inputs {
-        match ir.find_node(id) {
-            Some(found) => slice.push(found),
-            None => warnings.push(diag_sexpr(
-                "warning",
-                "W405",
-                (0, 0),
-                format!(
-                    "plan node {} declares input {} which does not resolve in the IR",
-                    node.id, id
-                ),
-            )),
+    /// Parses a `(execution-result (...))` value back into an
+    /// `ExecutionResult` (phase-5 fold-in scope item 1b: needed to read
+    /// `results.sexpr` back, e.g. from a cache). `None` for anything not
+    /// shaped as a two-element list headed by the bare symbol
+    /// `execution-result` whose second element is a field-pairs list, or
+    /// whose `status` is not one of the three known symbols. `reason` is
+    /// never read back into a field: `to_sexpr` re-derives it from
+    /// `status` alone, so round-tripping through `from_sexpr` and back
+    /// through `to_sexpr` reproduces it exactly.
+    ///
+    /// Round-trip law: for every value `v` produced by
+    /// `ExecutionResult::to_sexpr`, `ExecutionResult::from_sexpr(&v)
+    /// .unwrap().to_sexpr()` reprints byte-identically to `v` — the
+    /// canonical field order `to_sexpr` builds is a pure function of the
+    /// struct's data, not of the input's own field order, so the
+    /// round-trip holds regardless of any (nonexistent, in practice)
+    /// reordering in `v`.
+    pub fn from_sexpr(v: &Sexpr) -> Option<ExecutionResult> {
+        let items = v.as_list()?;
+        if items.len() != 2 {
+            return None;
         }
+        if items[0].as_sym() != Some("execution-result") {
+            return None;
+        }
+        let body = &items[1];
+        let node_id = body.assoc("node-id")?.as_str()?.to_string();
+        let status = match body.assoc("status")?.as_sym()? {
+            "succeeded" => ExecutionStatus::Succeeded,
+            "failed" => ExecutionStatus::Failed,
+            "deferred" => ExecutionStatus::Deferred,
+            _ => return None,
+        };
+        let candidate = body.assoc("candidate").cloned();
+        let recipe_identity = body
+            .assoc("recipe-identity")
+            .and_then(|s| s.as_str())
+            .map(String::from);
+        let diagnostics = body
+            .assoc("diagnostics")
+            .and_then(|d| d.as_list())
+            .map(|items| items.to_vec())
+            .unwrap_or_default();
+        Some(ExecutionResult {
+            node_id,
+            status,
+            candidate,
+            recipe_identity,
+            diagnostics,
+        })
     }
-    (slice, warnings)
 }
 
 /// Executes one plan node's recipe (mirrors `gymnast-execute-recipe`):
@@ -203,11 +230,15 @@ pub fn execute_recipe(ir: &Ir, node: &PlanNode) -> ExecutionResult {
     let executor = match recipe.execute {
         Some(executor) => executor,
         None => {
+            // Phase 5 fold-in scope item 1c: a deferred result still
+            // names the recipe that will eventually run it — the trust
+            // boundary the phase-5 model runner enforces needs recipe
+            // identity in evidence even before a candidate exists.
             return ExecutionResult {
                 node_id: node.id.clone(),
                 status: ExecutionStatus::Deferred,
                 candidate: None,
-                recipe_identity: None,
+                recipe_identity: Some(recipe.name.to_string()),
                 diagnostics: vec![],
             };
         }
@@ -233,7 +264,7 @@ pub fn execute_recipe(ir: &Ir, node: &PlanNode) -> ExecutionResult {
         };
     }
 
-    let (ir_slice, mut diagnostics) = resolve_ir_slice(ir, node);
+    let (ir_slice, mut diagnostics) = resolve_ir_slice(ir, &node.inputs);
     let candidate = executor(&ir_slice, node);
 
     let firewall_diags = candidate_diagnostics(node, &candidate);
@@ -319,7 +350,17 @@ fn nodes_of_kind<'a>(ir_slice: &'a [&'a IrNode], kind: &str) -> Vec<&'a IrNode> 
 /// `OUTPUT PROTOCOL` projection. `implements` is the ir-slice's ids in
 /// slice order (which is `node.inputs` order, since `resolve_ir_slice`
 /// walks `node.inputs` and only ever skips, never reorders).
-fn build_candidate(node: &PlanNode, files: Vec<(String, String)>, ir_slice: &[&IrNode]) -> Sexpr {
+///
+/// `pub(crate)` (phase-5 fold-in scope item 1f): the phase-5 model
+/// runner's bounded repair loop must build a re-attempt candidate through
+/// this exact framing, never by hand-rolling the `(candidate ...)` shape
+/// itself — one place decides what a well-formed candidate envelope
+/// looks like.
+pub(crate) fn build_candidate(
+    node: &PlanNode,
+    files: Vec<(String, String)>,
+    ir_slice: &[&IrNode],
+) -> Sexpr {
     let file_list: Vec<Sexpr> = files
         .into_iter()
         .map(|(path, content)| Sexpr::list(vec![Sexpr::Str(path), Sexpr::Str(content)]))
@@ -629,15 +670,23 @@ fn application_assembly_executor(ir_slice: &[&IrNode], node: &PlanNode) -> Sexpr
     }
     manifest.push_str("))\n");
 
-    let mut paths = node.may_write.iter();
-    let boot_path = paths
-        .next()
-        .cloned()
-        .unwrap_or_else(|| "generated/application.rb".to_string());
-    let manifest_path = paths
-        .next()
+    // Phase-5 fold-in scope item 1g: select each output path by ROLE
+    // (the `.sexpr` suffix identifies the manifest) rather than by
+    // sorted list position — position happened to match role only
+    // because `.rb` sorts before `.sexpr` byte-wise; a role-based
+    // selection stays correct independent of that coincidence.
+    let manifest_path = node
+        .may_write
+        .iter()
+        .find(|p| p.ends_with(".sexpr"))
         .cloned()
         .unwrap_or_else(|| "generated/manifest.sexpr".to_string());
+    let boot_path = node
+        .may_write
+        .iter()
+        .find(|p| !p.ends_with(".sexpr"))
+        .cloned()
+        .unwrap_or_else(|| "generated/application.rb".to_string());
 
     build_candidate(
         node,
@@ -751,6 +800,104 @@ mod tests {
         assert!(result.diagnostics.is_empty());
         let s = result.to_sexpr().print();
         assert!(s.contains("(reason requires-model)"));
+    }
+
+    /// Phase-5 fold-in scope item 1c: a deferred result must still carry
+    /// the recipe that will eventually run it.
+    #[test]
+    fn test_execute_recipe_deferred_carries_recipe_identity() {
+        let ir = Ir::new(
+            "gymnast.ir/0.1".to_string(),
+            "m".to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let node = ruby_node("m/plan/x", "transition-kernel-v1", vec![], vec![]);
+        let result = execute_recipe(&ir, &node);
+        assert_eq!(
+            result.recipe_identity.as_deref(),
+            Some("transition-kernel-v1")
+        );
+        let s = result.to_sexpr().print();
+        assert!(s.contains("(recipe-identity \"transition-kernel-v1\")"));
+    }
+
+    /// Phase-5 fold-in scope item 1b: `from_sexpr` round-trips every
+    /// shape `to_sexpr` can produce (succeeded-with-candidate, failed,
+    /// deferred).
+    #[test]
+    fn test_execution_result_from_sexpr_round_trips() {
+        let ir = Ir::new(
+            "gymnast.ir/0.1".to_string(),
+            "m".to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let type_node = IrNode::new(
+            "m/type/Foo".to_string(),
+            "type",
+            "Foo".to_string(),
+            vec![(":opaque".to_string(), Sexpr::sym("text"))],
+            vec![],
+        );
+        let ir_with_type = Ir::new(
+            "gymnast.ir/0.1".to_string(),
+            "m".to_string(),
+            vec![],
+            vec![type_node],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let succeeded_node = ruby_node(
+            "m/plan/design-contracts",
+            "design-contracts-v1",
+            vec!["m/type/Foo".to_string()],
+            vec!["generated/design/contracts.rb".to_string()],
+        );
+        let failed_node = ruby_node("m/plan/bogus", "nonexistent-v1", vec![], vec![]);
+        let deferred_node = ruby_node("m/plan/x", "transition-kernel-v1", vec![], vec![]);
+
+        let cases = [
+            execute_recipe(&ir_with_type, &succeeded_node),
+            execute_recipe(&ir, &failed_node),
+            execute_recipe(&ir, &deferred_node),
+        ];
+
+        for result in &cases {
+            let printed = result.to_sexpr();
+            let parsed = ExecutionResult::from_sexpr(&printed)
+                .unwrap_or_else(|| panic!("from_sexpr must parse {}", printed.print()));
+            assert_eq!(
+                parsed.to_sexpr().print(),
+                printed.print(),
+                "round-trip must reprint byte-identically"
+            );
+        }
+    }
+
+    #[test]
+    fn test_execution_result_from_sexpr_rejects_wrong_shape() {
+        assert!(ExecutionResult::from_sexpr(&Sexpr::sym("nope")).is_none());
+        assert!(
+            ExecutionResult::from_sexpr(&Sexpr::list(vec![Sexpr::sym("not-a-result")])).is_none()
+        );
+        assert!(ExecutionResult::from_sexpr(&Sexpr::list(vec![
+            Sexpr::sym("execution-result"),
+            Sexpr::list(vec![Sexpr::pair("node-id", Sexpr::Str("x".to_string()))]),
+        ]))
+        .is_none());
     }
 
     #[test]

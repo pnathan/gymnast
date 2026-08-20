@@ -13,5 +13,6 @@ pub mod plan;
 pub mod profile;
 pub mod prompt;
 pub mod recipe;
+pub mod runner;
 pub mod sexpr;
 pub mod span;

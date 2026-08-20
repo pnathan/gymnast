@@ -1,3 +1,4 @@
+use crate::diag::diag_sexpr;
 use crate::fingerprint;
 use crate::sexpr::Sexpr;
 
@@ -239,9 +240,91 @@ impl Ir {
     }
 }
 
+/// Resolves a plan node's `inputs` ids against `ir`, in the given order.
+/// An id that does not resolve is SKIPPED rather than silently dropped:
+/// it emits a `W405 unresolved-input` warning instead of vanishing
+/// without a trace (the phase-3 gate's finding on `filter_map` slices).
+///
+/// Shared by `recipe.rs` (folds the warnings into its `ExecutionResult`
+/// diagnostics) and `prompt.rs` (phase-5 fold-in scope item 1d: the
+/// prompt side previously dropped unresolved ids via its own inline
+/// `filter_map`, with no diagnostic at all — this is the single
+/// resolution both callers now share, so they can never drift).
+pub fn resolve_ir_slice<'a>(ir: &'a Ir, inputs: &[String]) -> (Vec<&'a IrNode>, Vec<Sexpr>) {
+    let mut slice = Vec::new();
+    let mut warnings = Vec::new();
+    for id in inputs {
+        match ir.find_node(id) {
+            Some(found) => slice.push(found),
+            None => warnings.push(diag_sexpr(
+                "warning",
+                "W405",
+                (0, 0),
+                format!("input {} does not resolve in the IR", id),
+            )),
+        }
+    }
+    (slice, warnings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_resolve_ir_slice_resolves_in_order_no_warnings() {
+        let a = IrNode::new(
+            "m/type/A".to_string(),
+            "type",
+            "A".to_string(),
+            vec![],
+            vec![],
+        );
+        let b = IrNode::new(
+            "m/type/B".to_string(),
+            "type",
+            "B".to_string(),
+            vec![],
+            vec![],
+        );
+        let ir = Ir::new(
+            "gymnast.ir/0.1".to_string(),
+            "m".to_string(),
+            vec![],
+            vec![a, b],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let inputs = vec!["m/type/B".to_string(), "m/type/A".to_string()];
+        let (slice, warnings) = resolve_ir_slice(&ir, &inputs);
+        assert!(warnings.is_empty());
+        let ids: Vec<&str> = slice.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["m/type/B", "m/type/A"]);
+    }
+
+    #[test]
+    fn test_resolve_ir_slice_skips_unresolved_with_w405_warning() {
+        let ir = Ir::new(
+            "gymnast.ir/0.1".to_string(),
+            "m".to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let inputs = vec!["m/type/DoesNotExist".to_string()];
+        let (slice, warnings) = resolve_ir_slice(&ir, &inputs);
+        assert!(slice.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            warnings[0].assoc("code").and_then(|c| c.as_str()),
+            Some("W405")
+        );
+    }
 
     #[test]
     fn test_ir_node_sorts_fields() {

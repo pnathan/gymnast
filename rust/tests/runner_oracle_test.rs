@@ -295,8 +295,7 @@ fn oracle_03_reject_then_accept() {
     );
 
     assert_ne!(
-        result.attempts[0].prompt_fingerprint,
-        result.attempts[1].prompt_fingerprint,
+        result.attempts[0].prompt_fingerprint, result.attempts[1].prompt_fingerprint,
         "the repaired attempt's prompt fingerprint must be recomputed, not carried over"
     );
 }
@@ -313,8 +312,11 @@ fn oracle_04_exhaustion_always_invalid_script() {
     let path = node.may_write[0].clone();
 
     let bad = candidate_sexpr("still-not-the-right-node-id", &[(path.as_str(), "; nope")]);
-    let mut provider =
-        ScriptedProvider::new(vec![Some(bad.print()), Some(bad.print()), Some(bad.print())]);
+    let mut provider = ScriptedProvider::new(vec![
+        Some(bad.print()),
+        Some(bad.print()),
+        Some(bad.print()),
+    ]);
 
     let result = run_node(&ir, &p, &node, &mut provider, 3);
 
@@ -339,9 +341,9 @@ fn oracle_05_none_and_unparseable_responses_record_e514_and_continue() {
 
     let good = candidate_sexpr(TRANSITION_NODE_ID, &[(path.as_str(), "; ok")]);
     let mut provider = ScriptedProvider::new(vec![
-        None,                                  // provider itself failed
+        None,                                       // provider itself failed
         Some("((( not a closed sexpr".to_string()), // unparseable
-        Some(good.print()),                    // recovers on the third attempt
+        Some(good.print()),                         // recovers on the third attempt
     ]);
 
     let result = run_node(&ir, &p, &node, &mut provider, 3);
@@ -398,13 +400,17 @@ fn oracle_07_firewall_supremacy_tampered_node_never_succeeds() {
     let path = node.may_write[0].clone();
     // Tamper the node's contract after construction without re-deriving
     // its fingerprint (mirrors candidate.rs's own gate-regression test).
-    node.may_write.push("generated/domain/injected.lisp".to_string());
+    node.may_write
+        .push("generated/domain/injected.lisp".to_string());
     assert!(!node.verify_fingerprint());
 
     // A candidate perfectly shaped for the ORIGINAL (untampered) contract.
     let good = candidate_sexpr(TRANSITION_NODE_ID, &[(path.as_str(), "; ok")]);
-    let mut provider =
-        ScriptedProvider::new(vec![Some(good.print()), Some(good.print()), Some(good.print())]);
+    let mut provider = ScriptedProvider::new(vec![
+        Some(good.print()),
+        Some(good.print()),
+        Some(good.print()),
+    ]);
 
     let result = run_node(&ir, &p, &node, &mut provider, 3);
 
@@ -559,8 +565,12 @@ fn oracle_11b_execution_result_from_sexpr_round_trips_todo_results_golden() {
     assert!(!entries.is_empty(), "golden must carry at least one entry");
 
     for entry in entries {
-        let result = ExecutionResult::from_sexpr(entry)
-            .unwrap_or_else(|| panic!("from_sexpr must parse every golden entry: {}", entry.print()));
+        let result = ExecutionResult::from_sexpr(entry).unwrap_or_else(|| {
+            panic!(
+                "from_sexpr must parse every golden entry: {}",
+                entry.print()
+            )
+        });
         assert_eq!(
             result.to_sexpr().print(),
             entry.print(),

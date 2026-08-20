@@ -13,7 +13,7 @@
 //! declaration-ordered inputs.
 
 use crate::fingerprint;
-use crate::ir::{Ir, IrNode};
+use crate::ir::{resolve_ir_slice, Ir, IrNode};
 use crate::plan::{extension_for, target_language, Plan, PlanNode};
 use crate::sexpr::Sexpr;
 
@@ -623,12 +623,16 @@ fn build_text(
 /// declaration-ordered or already-sorted `Vec`, never a hash map, so two
 /// independent calls over the same inputs always agree byte-for-byte.
 pub fn compile_prompt(ir: &Ir, plan: &Plan, node: &PlanNode) -> PromptPackage {
-    let ir_slice: Vec<IrNode> = node
-        .inputs
-        .iter()
-        .filter_map(|id| ir.find_node(id))
-        .cloned()
-        .collect();
+    // Phase-5 fold-in scope item 1d: resolution now goes through the
+    // SAME `resolve_ir_slice` `recipe.rs` uses, rather than this
+    // function's own `filter_map`, so the two consumers of `node.inputs`
+    // can never silently disagree about which ids resolve. The warnings
+    // are deliberately dropped here (not carried in `PromptPackage`,
+    // whose shape is otherwise pinned byte-for-byte by the todo.gym
+    // prompt goldens) — a caller that wants them calls
+    // `prompt_ir_slice_warnings` directly; see that function's doc.
+    let (resolved, _warnings) = resolve_ir_slice(ir, &node.inputs);
+    let ir_slice: Vec<IrNode> = resolved.into_iter().cloned().collect();
 
     let dependency_slice: Vec<(String, String)> = node
         .depends_on
@@ -688,6 +692,18 @@ pub fn compile_prompts(ir: &Ir, plan: &Plan) -> Vec<PromptPackage> {
         .collect()
 }
 
+/// The `W405 unresolved-input` warnings `compile_prompt(ir, plan, node)`
+/// would itself compute internally, exposed separately so a caller (the
+/// `prompts`/`compile` CLI subcommands) can report them without changing
+/// `PromptPackage`'s pinned shape (phase-5 fold-in scope item 1d: "the
+/// warnings surface through the caller, not inside the package").
+/// `todo.gym` has no unresolved input anywhere in its plan, so this is
+/// always empty for it — the prompts/plan goldens are unaffected whether
+/// or not a caller chooses to call this.
+pub fn prompt_ir_slice_warnings(ir: &Ir, node: &PlanNode) -> Vec<Sexpr> {
+    resolve_ir_slice(ir, &node.inputs).1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -712,6 +728,34 @@ mod tests {
             vec![],
             vec![],
         )
+    }
+
+    #[test]
+    fn test_prompt_ir_slice_warnings_fires_w405_but_compile_prompt_ignores_it() {
+        let ir = minimal_ir_with_type();
+        let node = PlanNode::new(
+            "m/plan/x".to_string(),
+            "structural",
+            "design-contracts-v1",
+            vec!["m/type/DoesNotExist".to_string()],
+            vec![],
+            Sexpr::sym("lamedh"),
+            Sexpr::sym("none"),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let warnings = prompt_ir_slice_warnings(&ir, &node);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            warnings[0].assoc("code").and_then(|c| c.as_str()),
+            Some("W405")
+        );
+
+        let pkg = compile_prompt(&ir, &plan(&ir), &node);
+        assert!(pkg.ir_slice.is_empty());
+        assert!(!pkg.to_sexpr().print().contains("W405"));
     }
 
     #[test]
