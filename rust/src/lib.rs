@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ast;
+pub mod cache;
 pub mod candidate;
 pub mod check;
 pub mod diag;

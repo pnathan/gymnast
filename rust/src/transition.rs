@@ -13,6 +13,7 @@
 //! `sexpr::MAX_PARSE_DEPTH`) predicate/expression tree, never on
 //! attacker-controlled repetition).
 
+use crate::diag::diag_sexpr;
 use crate::ir::{Ir, IrNode};
 use crate::sexpr::Sexpr;
 
@@ -266,8 +267,120 @@ fn nth_arg(items: &[Sexpr], n: usize) -> Sexpr {
     items.get(n).cloned().unwrap_or_else(|| Sexpr::List(vec![]))
 }
 
-/// The TOTAL, closed predicate evaluator. Ported exactly, including the
-/// permissive defaults:
+/// The tri-state verdict a predicate can reach under the phase-7 closed
+/// evaluator (`docs/rust-port-plan-phase7.md`, section A): `Holds`/`Fails`
+/// for a GROUNDED verdict (every branch that decided it was actually
+/// computed), `Unknown` wherever the phase-6 boolean evaluator's
+/// permissive defaults used to fire silently. `eval_predicate3` never
+/// panics and never recurses beyond the (already depth-bounded) predicate
+/// tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    Holds,
+    Fails,
+    Unknown,
+}
+
+/// The TOTAL, closed tri-state predicate evaluator:
+///
+/// | pred | verdict |
+/// |---|---|
+/// | nil / any atom | `Unknown` |
+/// | `(= a b)` | `Holds`/`Fails` by structural equality |
+/// | `(not p)` | `Fails`/`Holds` swap; `Unknown` stays `Unknown` |
+/// | `(and p...)` | `Fails` if any `Fails`; else `Unknown` if any `Unknown`; else `Holds` (vacuously `Holds` on an empty tail) |
+/// | `(or p...)` | `Holds` if any `Holds`; else `Unknown` if any `Unknown`; else `Fails` (vacuously `Fails` on an empty tail) |
+/// | `(< a b)` / `(<= a b)` | `Holds`/`Fails` when both sides eval to `Int`; `Unknown` otherwise |
+/// | unrecognized head | `Unknown` |
+pub fn eval_predicate3(
+    pred: &Sexpr,
+    state: &State,
+    actor: Option<&Sexpr>,
+    input: Option<&Sexpr>,
+) -> Verdict {
+    let items = match pred {
+        Sexpr::List(items) if !items.is_empty() => items,
+        _ => return Verdict::Unknown, // nil / any atom
+    };
+    match items[0].as_sym() {
+        Some("=") => {
+            let a = eval_expr(&nth_arg(items, 1), state, actor, input);
+            let b = eval_expr(&nth_arg(items, 2), state, actor, input);
+            if a == b {
+                Verdict::Holds
+            } else {
+                Verdict::Fails
+            }
+        }
+        Some("not") => match eval_predicate3(&nth_arg(items, 1), state, actor, input) {
+            Verdict::Holds => Verdict::Fails,
+            Verdict::Fails => Verdict::Holds,
+            Verdict::Unknown => Verdict::Unknown,
+        },
+        Some("and") => {
+            let mut any_unknown = false;
+            for p in &items[1..] {
+                match eval_predicate3(p, state, actor, input) {
+                    Verdict::Fails => return Verdict::Fails,
+                    Verdict::Unknown => any_unknown = true,
+                    Verdict::Holds => {}
+                }
+            }
+            if any_unknown {
+                Verdict::Unknown
+            } else {
+                Verdict::Holds
+            }
+        }
+        Some("or") => {
+            let mut any_unknown = false;
+            for p in &items[1..] {
+                match eval_predicate3(p, state, actor, input) {
+                    Verdict::Holds => return Verdict::Holds,
+                    Verdict::Unknown => any_unknown = true,
+                    Verdict::Fails => {}
+                }
+            }
+            if any_unknown {
+                Verdict::Unknown
+            } else {
+                Verdict::Fails
+            }
+        }
+        Some("<") => {
+            let a = eval_expr(&nth_arg(items, 1), state, actor, input);
+            let b = eval_expr(&nth_arg(items, 2), state, actor, input);
+            match (a.as_int(), b.as_int()) {
+                (Some(x), Some(y)) => {
+                    if x < y {
+                        Verdict::Holds
+                    } else {
+                        Verdict::Fails
+                    }
+                }
+                _ => Verdict::Unknown,
+            }
+        }
+        Some("<=") => {
+            let a = eval_expr(&nth_arg(items, 1), state, actor, input);
+            let b = eval_expr(&nth_arg(items, 2), state, actor, input);
+            match (a.as_int(), b.as_int()) {
+                (Some(x), Some(y)) => {
+                    if x <= y {
+                        Verdict::Holds
+                    } else {
+                        Verdict::Fails
+                    }
+                }
+                _ => Verdict::Unknown,
+            }
+        }
+        _ => Verdict::Unknown, // unrecognized head (calls, forall, ...)
+    }
+}
+
+/// The TOTAL, closed BOOLEAN predicate evaluator. Preserves phase-6's
+/// behavior EXACTLY, permissive defaults included:
 ///
 /// | pred | result |
 /// |---|---|
@@ -304,6 +417,24 @@ pub fn eval_predicate_basis(
     (verdict, checked)
 }
 
+/// The recursive walk behind `eval_predicate_basis`. `not`/`and`/`or`
+/// keep the ORIGINAL phase-6 recursion (threading one mutable `checked`
+/// flag that only ever moves true -> false, matching Rust's `.all()`/
+/// `.any()` short-circuit exactly) rather than being expressed over
+/// `eval_predicate3`: the tri-state `Verdict` for a composite predicate
+/// is deliberately ORDER-INDEPENDENT (`docs/rust-port-plan-phase7.md`
+/// section A's and/or table), while phase-6's `checked` propagation is
+/// ORDER-DEPENDENT (an item after a short-circuiting one is never
+/// evaluated, so it can never touch `checked`) — collapsing the two would
+/// silently change which predicates come back `checked` on a passing
+/// `and`/`or`, breaking the "EXACT phase-6 behavior" contract
+/// (`evaluator3_oracle_test.rs`'s oracle_02 corpus pins several such
+/// order-dependent cases explicitly). The LEAF operators (`=`, `<`,
+/// `<=`, and the two permissive-default cases: a bare atom/nil predicate,
+/// and an unrecognized head) have no such order dependency, so they ARE
+/// expressed directly over `eval_predicate3`'s `Verdict` here — this is
+/// the "reimplemented over `eval_predicate3`" the plan asks for, applied
+/// exactly where it is order-independent and therefore safe.
 fn eval_predicate_inner(
     pred: &Sexpr,
     state: &State,
@@ -312,22 +443,13 @@ fn eval_predicate_inner(
     checked: &mut bool,
 ) -> bool {
     let items = match pred {
-        Sexpr::List(items) => items,
+        Sexpr::List(items) if !items.is_empty() => items,
         _ => {
             *checked = false;
-            return true; // any atom (Sym/Str/Int): symbolic default holds
+            return true; // any atom (Sym/Str/Int) or nil: symbolic default holds
         }
     };
-    if items.is_empty() {
-        *checked = false;
-        return true; // nil: symbolic default holds
-    }
     match items[0].as_sym() {
-        Some("=") => {
-            let a = eval_expr(&nth_arg(items, 1), state, actor, input);
-            let b = eval_expr(&nth_arg(items, 2), state, actor, input);
-            a == b
-        }
         Some("not") => !eval_predicate_inner(&nth_arg(items, 1), state, actor, input, checked),
         Some("and") => items[1..]
             .iter()
@@ -335,28 +457,16 @@ fn eval_predicate_inner(
         Some("or") => items[1..]
             .iter()
             .any(|p| eval_predicate_inner(p, state, actor, input, checked)),
-        Some("<") => {
-            let a = eval_expr(&nth_arg(items, 1), state, actor, input);
-            let b = eval_expr(&nth_arg(items, 2), state, actor, input);
-            match (a.as_int(), b.as_int()) {
-                (Some(x), Some(y)) => x < y,
-                _ => {
-                    *checked = false; // total-false delta: not evidence
-                    false
-                }
+        Some("=") | Some("<") | Some("<=") => match eval_predicate3(pred, state, actor, input) {
+            Verdict::Holds => true,
+            Verdict::Fails => false,
+            // Only reachable via `<`/`<=` over a non-Int operand (`=` is
+            // always grounded): matches the old total-false delta exactly.
+            Verdict::Unknown => {
+                *checked = false;
+                false
             }
-        }
-        Some("<=") => {
-            let a = eval_expr(&nth_arg(items, 1), state, actor, input);
-            let b = eval_expr(&nth_arg(items, 2), state, actor, input);
-            match (a.as_int(), b.as_int()) {
-                (Some(x), Some(y)) => x <= y,
-                _ => {
-                    *checked = false;
-                    false
-                }
-            }
-        }
+        },
         _ => {
             *checked = false;
             true // unrecognized head (calls, forall, ...): symbolic default holds
@@ -405,7 +515,14 @@ pub struct TraceStep {
     pub pre_state: State,
     pub post_state: State,
     pub result: Option<Sexpr>,
-    pub outcome: Sexpr, // (succeeded) | (failed <error>) | (precondition-failed) | (no-matching-transition <op>)
+    pub outcome: Sexpr, // (succeeded) | (failed <error>) | (precondition-failed) | (no-matching-transition <op>) | (ambiguous-operation <op>)
+    /// `true` iff any precondition or matched failure-clause `:when`
+    /// guard evaluated while producing this step rested on a permissive
+    /// (unchecked) default (`docs/rust-port-plan-phase7.md` section A).
+    /// A step that never applied a transition at all (no-match /
+    /// ambiguous-operation) performed no guard evaluation, so it is
+    /// vacuously grounded (`false`), never symbolic.
+    pub symbolic: bool,
 }
 
 /// `pub(crate)`: shared with `verify.rs`'s obligation lowering, which
@@ -419,21 +536,51 @@ pub(crate) fn keyword_value<'a>(items: &'a [Sexpr], key: &str) -> Option<&'a Sex
 }
 
 /// The first failure clause (in declared order) whose `:when` predicate
-/// is PRESENT and holds. A failure clause with no `:when` at all never
-/// matches (mirrors the Lamedh reference's `(if when-pred ... nil)`).
-fn find_matching_failure<'a>(
+/// is PRESENT and holds, plus whether ANY `:when` guard actually
+/// evaluated along the way (up to and including the matching one, if
+/// any) rested on a permissive default. A failure clause with no
+/// `:when` at all never matches, and contributes no evaluation (mirrors
+/// the Lamedh reference's `(if when-pred ... nil)`). Boolean semantics
+/// are UNCHANGED from phase 6 (`eval_predicate`); only the basis is new.
+fn find_matching_failure_with_basis<'a>(
     failures: &'a [Sexpr],
     state: &State,
     actor: Option<&Sexpr>,
     input: Option<&Sexpr>,
-) -> Option<&'a Sexpr> {
-    failures.iter().find(|f| {
+) -> (Option<&'a Sexpr>, bool) {
+    let mut symbolic = false;
+    for f in failures {
         let items = f.as_list().unwrap_or(&[]);
-        match keyword_value(items, ":when") {
-            Some(pred) => eval_predicate(pred, state, actor, input),
-            None => false,
+        if let Some(pred) = keyword_value(items, ":when") {
+            let (holds, checked) = eval_predicate_basis(pred, state, actor, input);
+            symbolic = symbolic || !checked;
+            if holds {
+                return (Some(f), symbolic);
+            }
         }
-    })
+    }
+    (None, symbolic)
+}
+
+/// Whether every precondition holds (boolean semantics UNCHANGED from
+/// phase 6, short-circuiting at the first failing one exactly like
+/// `.all()`), plus whether any precondition actually evaluated along the
+/// way rested on a permissive default.
+fn preconditions_hold_with_basis(
+    preconditions: &[Sexpr],
+    state: &State,
+    actor: Option<&Sexpr>,
+    input: Option<&Sexpr>,
+) -> (bool, bool) {
+    let mut symbolic = false;
+    for p in preconditions {
+        let (holds, checked) = eval_predicate_basis(p, state, actor, input);
+        symbolic = symbolic || !checked;
+        if !holds {
+            return (false, symbolic);
+        }
+    }
+    (true, symbolic)
 }
 
 /// Applies one `Transition` to `state`, in the reference's exact order:
@@ -451,7 +598,9 @@ pub fn apply_transition(
     actor: Option<&Sexpr>,
     input: Option<&Sexpr>,
 ) -> TraceStep {
-    if let Some(failure) = find_matching_failure(&t.failures, state, actor, input) {
+    let (matched_failure, failure_symbolic) =
+        find_matching_failure_with_basis(&t.failures, state, actor, input);
+    if let Some(failure) = matched_failure {
         let error_name = failure
             .as_list()
             .and_then(|items| items.first())
@@ -465,13 +614,13 @@ pub fn apply_transition(
             post_state: state.clone(),
             result: None,
             outcome: Sexpr::List(vec![Sexpr::sym("failed"), error_name]),
+            symbolic: failure_symbolic,
         };
     }
 
-    let preconditions_hold = t
-        .preconditions
-        .iter()
-        .all(|p| eval_predicate(p, state, actor, input));
+    let (preconditions_hold, precondition_symbolic) =
+        preconditions_hold_with_basis(&t.preconditions, state, actor, input);
+    let symbolic = failure_symbolic || precondition_symbolic;
     if preconditions_hold {
         let input_val = input.cloned().unwrap_or_else(|| Sexpr::List(vec![]));
         let mut post = state.clone();
@@ -501,6 +650,7 @@ pub fn apply_transition(
             post_state: post,
             result: Some(input_val),
             outcome: Sexpr::List(vec![Sexpr::sym("succeeded")]),
+            symbolic,
         };
     }
 
@@ -512,6 +662,7 @@ pub fn apply_transition(
         post_state: state.clone(),
         result: None,
         outcome: Sexpr::List(vec![Sexpr::sym("precondition-failed")]),
+        symbolic,
     }
 }
 
@@ -572,15 +723,40 @@ fn no_matching_transition_violation(op: &str) -> Sexpr {
     ])
 }
 
+fn ambiguous_operation_violation(op: &str, candidates: &[&str]) -> Sexpr {
+    Sexpr::List(vec![
+        Sexpr::sym("violation"),
+        Sexpr::List(vec![Sexpr::sym("type"), Sexpr::sym("ambiguous-operation")]),
+        Sexpr::List(vec![Sexpr::sym("operation"), Sexpr::sym(op)]),
+        Sexpr::List(vec![
+            Sexpr::sym("candidates"),
+            Sexpr::List(candidates.iter().map(|c| Sexpr::sym(c)).collect()),
+        ]),
+    ])
+}
+
+/// A step op `s` matches a transition operation `op` when `op == s` OR
+/// `op` ends with `"/" + s` (`docs/rust-port-plan-phase7.md` section B):
+/// a bare helper name like `create_task` uniquely reaches a
+/// slash-qualified operation like `todo_service/create_task`, making the
+/// previously-dead trace machinery live for `.gym`'s actual syntax.
+fn matches_operation(op: &str, s: &str) -> bool {
+    op == s
+        || (op.len() > s.len() && op.ends_with(s) && op.as_bytes()[op.len() - s.len() - 1] == b'/')
+}
+
 /// Executes `steps` against `ir`'s extracted transitions, starting from
 /// `make_initial_state(ir)`, up to `TRACE_BOUND` steps. Operation
-/// matching is EXACT equality against `Transition::operation`. An
-/// unmatched op records BOTH an error `TraceStep` (state unchanged,
-/// outcome `(no-matching-transition <op>)`) AND a `violation` entry;
-/// a matched op is applied via `apply_transition`, and every invariant
-/// violated by the resulting state is appended to `violations`. An
-/// iterative loop (not recursion) over at most `TRACE_BOUND` steps, so
-/// this is bounded and total regardless of `steps`' length.
+/// matching is the suffix rule (`matches_operation`, plan section B):
+/// zero matches records `(no-matching-transition <op>)` and a violation,
+/// exactly as before; MORE than one match records `(ambiguous-operation
+/// <op>)` and a violation naming every candidate (never a silent pick;
+/// state is left unchanged, and no invariant re-check runs since nothing
+/// mutated); exactly one match is applied via `apply_transition`, and
+/// every invariant violated by the resulting state is appended to
+/// `violations`. An iterative loop (not recursion) over at most
+/// `TRACE_BOUND` steps, so this is bounded and total regardless of
+/// `steps`' length.
 pub fn execute_trace(ir: &Ir, steps: &[Sexpr]) -> Trace {
     let transitions = extract_transitions(ir);
     let mut state = make_initial_state(ir);
@@ -589,8 +765,12 @@ pub fn execute_trace(ir: &Ir, steps: &[Sexpr]) -> Trace {
 
     for step in steps.iter().take(TRACE_BOUND) {
         let (op, actor, input) = parse_step(step);
-        match transitions.iter().find(|t| t.operation == op) {
-            None => {
+        let matched: Vec<&Transition> = transitions
+            .iter()
+            .filter(|t| matches_operation(&t.operation, &op))
+            .collect();
+        match matched.len() {
+            0 => {
                 trace_steps.push(TraceStep {
                     transition_id: "unknown".to_string(),
                     actor: actor.clone(),
@@ -602,14 +782,30 @@ pub fn execute_trace(ir: &Ir, steps: &[Sexpr]) -> Trace {
                         Sexpr::sym("no-matching-transition"),
                         Sexpr::sym(&op),
                     ]),
+                    symbolic: false,
                 });
                 violations.push(no_matching_transition_violation(&op));
             }
-            Some(t) => {
-                let step_result = apply_transition(t, &state, actor.as_ref(), input.as_ref());
+            1 => {
+                let step_result =
+                    apply_transition(matched[0], &state, actor.as_ref(), input.as_ref());
                 state = step_result.post_state.clone();
                 violations.extend(check_invariants(ir, &state));
                 trace_steps.push(step_result);
+            }
+            _ => {
+                let candidates: Vec<&str> = matched.iter().map(|t| t.operation.as_str()).collect();
+                trace_steps.push(TraceStep {
+                    transition_id: "unknown".to_string(),
+                    actor: actor.clone(),
+                    input: input.clone(),
+                    pre_state: state.clone(),
+                    post_state: state.clone(),
+                    result: None,
+                    outcome: Sexpr::List(vec![Sexpr::sym("ambiguous-operation"), Sexpr::sym(&op)]),
+                    symbolic: false,
+                });
+                violations.push(ambiguous_operation_violation(&op, &candidates));
             }
         }
     }
@@ -634,6 +830,7 @@ pub fn default_trace_step() -> TraceStep {
         post_state: vec![],
         result: None,
         outcome: Sexpr::List(vec![]),
+        symbolic: false,
     }
 }
 
@@ -742,6 +939,10 @@ pub fn trace_step_to_sexpr(step: &TraceStep) -> Sexpr {
                 step.result.clone().unwrap_or_else(|| Sexpr::List(vec![])),
             ]),
             Sexpr::List(vec![Sexpr::sym("outcome"), step.outcome.clone()]),
+            Sexpr::List(vec![
+                Sexpr::sym("basis"),
+                Sexpr::sym(if step.symbolic { "symbolic" } else { "checked" }),
+            ]),
         ]),
     ])
 }
@@ -770,6 +971,55 @@ pub fn counterexample(violation: &Sexpr, trace_step: &TraceStep) -> Sexpr {
         ]),
         Sexpr::List(vec![Sexpr::sym("outcome"), trace_step.outcome.clone()]),
     ])
+}
+
+// -----------------------------------------------------------------------
+// Transition ref-checking (plan section C).
+// -----------------------------------------------------------------------
+
+fn w406_unresolved_state_ref(transition_id: &str, state_ref: &str) -> Sexpr {
+    diag_sexpr(
+        "warning",
+        "W406",
+        (0, 0),
+        format!(
+            "unresolved-state-ref: transition {} references undeclared state {}",
+            transition_id, state_ref
+        ),
+    )
+}
+
+/// One `W406 unresolved-state-ref` warning per `reads`/`writes` entry
+/// that names no `state` IR node (`docs/rust-port-plan-phase7.md`
+/// section C), mirroring the Lamedh reference's diagnostic. Every entry
+/// is checked independently -- a name appearing in both `reads` and
+/// `writes` produces two warnings, one per occurrence, matching the
+/// plan's own worked arithmetic over `examples/todo.gym`. Total over any
+/// `Ir`: a linear membership scan against the (small, already-parsed)
+/// list of declared state-node names, no hashing, no iteration order
+/// dependency that could reach the output.
+pub fn check_transition_refs(ir: &Ir) -> Vec<Sexpr> {
+    let state_names: Vec<&str> = ir
+        .nodes_of_kind("state")
+        .into_iter()
+        .map(|n| n.name.as_str())
+        .collect();
+    let is_declared = |name: &str| state_names.iter().any(|s| *s == name);
+
+    let mut warnings = Vec::new();
+    for t in extract_transitions(ir) {
+        for r in &t.reads {
+            if !is_declared(r) {
+                warnings.push(w406_unresolved_state_ref(&t.id, r));
+            }
+        }
+        for w in &t.writes {
+            if !is_declared(w) {
+                warnings.push(w406_unresolved_state_ref(&t.id, w));
+            }
+        }
+    }
+    warnings
 }
 
 #[cfg(test)]
@@ -912,6 +1162,7 @@ mod tests {
             post_state: vec![("s".to_string(), Sexpr::Int(1))],
             result: None,
             outcome: Sexpr::List(vec![Sexpr::sym("precondition-failed")]),
+            symbolic: false,
         };
         let violation = Sexpr::List(vec![Sexpr::sym("violation")]);
         let ce = counterexample(&violation, &step);

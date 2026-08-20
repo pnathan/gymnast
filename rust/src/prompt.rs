@@ -618,6 +618,27 @@ fn build_text(
     format!("{}\n", parts.join("\n\n"))
 }
 
+/// `(dep plan-node id, dep fingerprint | "missing")` pairs for
+/// `node.depends_on`, in dependency-order (already sorted at
+/// `PlanNode::new` construction time). Shared by `compile_prompt` and
+/// `cache::cache_key_material` (`docs/rust-port-plan-phase7.md` section
+/// E: "REUSE that builder ... never a second copy") -- `pub(crate)` so
+/// `cache.rs` can call it without widening this module's public surface.
+pub(crate) fn dependency_slice(plan: &Plan, node: &PlanNode) -> Vec<(String, String)> {
+    node.depends_on
+        .iter()
+        .map(|dep_id| {
+            let fp = plan
+                .nodes
+                .iter()
+                .find(|n| &n.id == dep_id)
+                .map(|n| n.fingerprint.clone())
+                .unwrap_or_else(|| "missing".to_string());
+            (dep_id.clone(), fp)
+        })
+        .collect()
+}
+
 /// Compiles one plan node's contract into a `PromptPackage`. Pure in
 /// `(ir, plan, node)`: every collection built here walks a
 /// declaration-ordered or already-sorted `Vec`, never a hash map, so two
@@ -634,19 +655,7 @@ pub fn compile_prompt(ir: &Ir, plan: &Plan, node: &PlanNode) -> PromptPackage {
     let (resolved, _warnings) = resolve_ir_slice(ir, &node.id, &node.inputs);
     let ir_slice: Vec<IrNode> = resolved.into_iter().cloned().collect();
 
-    let dependency_slice: Vec<(String, String)> = node
-        .depends_on
-        .iter()
-        .map(|dep_id| {
-            let fp = plan
-                .nodes
-                .iter()
-                .find(|n| &n.id == dep_id)
-                .map(|n| n.fingerprint.clone())
-                .unwrap_or_else(|| "missing".to_string());
-            (dep_id.clone(), fp)
-        })
-        .collect();
+    let dependency_slice = dependency_slice(plan, node);
 
     let output_protocol = build_output_protocol(node);
     let text = build_text(node, &ir_slice, &dependency_slice, &output_protocol);

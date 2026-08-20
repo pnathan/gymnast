@@ -172,7 +172,12 @@ fn test_grounded_pass_is_checked_not_symbolic() {
 }
 
 /// A vacuous pass (unknown-head predicate) is marked SYMBOLIC and carries
-/// the I601 marker — the phase-6 gate's finding 1, now a contract.
+/// the I601 marker — the phase-6 gate's finding 1. PHASE 7 UPDATE: the
+/// tri-state evaluator (`docs/rust-port-plan-phase7.md` section A) no
+/// longer launders this permissive default into a `passed` verdict —
+/// its deciding evaluation is `Verdict::Unknown`, which now yields the
+/// new `indeterminate` status (basis stays `symbolic`, I601 stays
+/// present); `passed` is reserved for a GROUNDED `Holds`.
 #[test]
 fn test_vacuous_pass_is_marked_symbolic() {
     let ir = build_ir(
@@ -187,7 +192,7 @@ fn test_vacuous_pass_is_marked_symbolic() {
     let result = verify_obligation(&ir, &obs[0]);
     assert_eq!(
         field(&result, "status").and_then(|s| s.as_sym()),
-        Some("passed")
+        Some("indeterminate")
     );
     assert_eq!(
         field(&result, "basis").and_then(|s| s.as_sym()),
@@ -198,10 +203,16 @@ fn test_vacuous_pass_is_marked_symbolic() {
     assert!(result.print().contains("I601"));
 }
 
-/// A fabricated failure from the non-Int-comparison delta is also marked
-/// symbolic — the mirror direction of finding 4.
+/// A defaulted non-Int comparison is also marked symbolic — the mirror
+/// direction of finding 4. PHASE 7 UPDATE: under the tri-state table
+/// (section A), `<=` over a non-Int operand is `Verdict::Unknown`, not
+/// `Fails` — the phase-6 boolean evaluator's "total-false" delta was
+/// exactly the fabricated-failure behavior the gate flagged, so this
+/// obligation is now `indeterminate` (basis stays `symbolic`) rather
+/// than a manufactured `failed`; `failed` is reserved for a GROUNDED
+/// `Fails`.
 #[test]
-fn test_defaulted_failure_is_marked_symbolic() {
+fn test_defaulted_comparison_is_marked_indeterminate() {
     let ir = build_ir(
         vec![state_node("store", Sexpr::list(vec![]))],
         vec![],
@@ -218,7 +229,7 @@ fn test_defaulted_failure_is_marked_symbolic() {
     let result = verify_obligation(&ir, &obs[0]);
     assert_eq!(
         field(&result, "status").and_then(|s| s.as_sym()),
-        Some("failed")
+        Some("indeterminate")
     );
     assert_eq!(
         field(&result, "basis").and_then(|s| s.as_sym()),

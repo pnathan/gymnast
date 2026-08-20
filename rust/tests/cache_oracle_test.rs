@@ -196,7 +196,10 @@ fn oracle_01b_cache_key_material_shape_and_values_over_every_plan_node() {
     for node in &p.nodes {
         let material = cache_key_material(&ir, &p, node);
         assert_eq!(
-            material.as_list().and_then(|l| l.first()).and_then(|s| s.as_sym()),
+            material
+                .as_list()
+                .and_then(|l| l.first())
+                .and_then(|s| s.as_sym()),
             Some("cache-key-material")
         );
         assert_eq!(
@@ -392,9 +395,17 @@ fn oracle_03c_store_replaces_same_key_len_unchanged_lookup_returns_newest() {
     store.store(old);
     assert_eq!(store.len(), 1);
     store.store(new.clone());
-    assert_eq!(store.len(), 1, "storing under an existing key must replace, not grow");
+    assert_eq!(
+        store.len(),
+        1,
+        "storing under an existing key must replace, not grow"
+    );
     assert_eq!(store.lookup("k1"), Some(&new));
-    assert_eq!(store.keys(), vec!["k1"], "no duplicate key entries after replace");
+    assert_eq!(
+        store.keys(),
+        vec!["k1"],
+        "no duplicate key entries after replace"
+    );
 }
 
 #[test]
@@ -515,7 +526,10 @@ fn oracle_05b_transitive_closure_design_contracts_is_all_eight_nodes() {
         ],
         "design-contracts is the root every other node transitively depends on"
     );
-    assert!(closure.contains(&"todo/plan/design-contracts".to_string()), "closure must include the seed");
+    assert!(
+        closure.contains(&"todo/plan/design-contracts".to_string()),
+        "closure must include the seed"
+    );
     assert_eq!(closure.len(), 8);
 }
 
@@ -535,7 +549,10 @@ fn oracle_05c_transitive_closure_transition_kernel() {
             "todo/plan/acceptance-harness".to_string(),
         ]
     );
-    assert!(closure.contains(&"todo/plan/transition-kernel".to_string()), "closure must include the seed");
+    assert!(
+        closure.contains(&"todo/plan/transition-kernel".to_string()),
+        "closure must include the seed"
+    );
     assert_eq!(closure.len(), 6);
     assert!(!closure.contains(&"todo/plan/design-contracts".to_string()));
     assert!(!closure.contains(&"todo/plan/interface-contracts".to_string()));
@@ -554,7 +571,10 @@ fn oracle_05d_transitive_closure_service_handlers() {
             "todo/plan/application-assembly".to_string(),
         ]
     );
-    assert!(closure.contains(&"todo/plan/service-handlers".to_string()), "closure must include the seed");
+    assert!(
+        closure.contains(&"todo/plan/service-handlers".to_string()),
+        "closure must include the seed"
+    );
     assert_eq!(closure.len(), 3);
 }
 
@@ -570,7 +590,10 @@ fn oracle_05e_transitive_closure_acceptance_harness() {
             "todo/plan/application-assembly".to_string(),
         ]
     );
-    assert!(closure.contains(&"todo/plan/acceptance-harness".to_string()), "closure must include the seed");
+    assert!(
+        closure.contains(&"todo/plan/acceptance-harness".to_string()),
+        "closure must include the seed"
+    );
     assert_eq!(closure.len(), 2);
 }
 
@@ -712,7 +735,9 @@ fn oracle_07a_cache_check_node_miss_before_hit_after_store() {
 
     let miss = cache_check_node(&store, &ir, &p, node);
     assert_eq!(
-        miss.as_list().and_then(|l| l.first()).and_then(|s| s.as_sym()),
+        miss.as_list()
+            .and_then(|l| l.first())
+            .and_then(|s| s.as_sym()),
         Some("cache-miss")
     );
     assert_eq!(
@@ -733,7 +758,9 @@ fn oracle_07a_cache_check_node_miss_before_hit_after_store() {
     );
     let hit = cache_check_node(&store2, &ir, &p, node);
     assert_eq!(
-        hit.as_list().and_then(|l| l.first()).and_then(|s| s.as_sym()),
+        hit.as_list()
+            .and_then(|l| l.first())
+            .and_then(|s| s.as_sym()),
         Some("cache-hit")
     );
     assert_eq!(field(&hit, "candidate"), Some(&candidate));
@@ -763,12 +790,16 @@ fn oracle_07b_cache_check_plan_one_hit_rest_miss() {
     assert_eq!(results.len(), p.nodes.len());
     let hits = results
         .iter()
-        .filter(|r| r.as_list().and_then(|l| l.first()).and_then(|s| s.as_sym()) == Some("cache-hit"))
+        .filter(|r| {
+            r.as_list().and_then(|l| l.first()).and_then(|s| s.as_sym()) == Some("cache-hit")
+        })
         .count();
     assert_eq!(hits, 1, "exactly the stored node should hit");
     let misses = results
         .iter()
-        .filter(|r| r.as_list().and_then(|l| l.first()).and_then(|s| s.as_sym()) == Some("cache-miss"))
+        .filter(|r| {
+            r.as_list().and_then(|l| l.first()).and_then(|s| s.as_sym()) == Some("cache-miss")
+        })
         .count();
     assert_eq!(misses, p.nodes.len() - 1);
 }
@@ -782,7 +813,10 @@ fn oracle_07c_cache_explain_node_no_cache_entry() {
 
     let explanation = cache_explain_node(&store, &ir, &p, node);
     assert_eq!(
-        explanation.as_list().and_then(|l| l.first()).and_then(|s| s.as_sym()),
+        explanation
+            .as_list()
+            .and_then(|l| l.first())
+            .and_then(|s| s.as_sym()),
         Some("explanation")
     );
     assert_eq!(
@@ -890,10 +924,15 @@ fn oracle_08_bundle_fingerprint_recomputes_over_fingerprint_free_form() {
         .to_string();
 
     let outer = bundle.as_list().expect("bundle must be a list").to_vec();
-    let mut inner = outer[1].as_list().expect("bundle nests one field list").to_vec();
+    let mut inner = outer[1]
+        .as_list()
+        .expect("bundle nests one field list")
+        .to_vec();
     let last = inner.pop().expect("bundle field list must be non-empty");
     assert_eq!(
-        last.as_list().and_then(|l| l.first()).and_then(|s| s.as_sym()),
+        last.as_list()
+            .and_then(|l| l.first())
+            .and_then(|s| s.as_sym()),
         Some("fingerprint"),
         "fingerprint must be the LAST field, same as Ir/Plan/PlanNode/PromptPackage"
     );
@@ -979,7 +1018,11 @@ fn oracle_10a_e601_fires_once_for_a_duplicated_property_name() {
         vec![],
     );
     let obligations = lower_all_obligations(&ir);
-    assert_eq!(obligations.len(), 2, "both clauses must lower (duplication is not deduped away)");
+    assert_eq!(
+        obligations.len(),
+        2,
+        "both clauses must lower (duplication is not deduped away)"
+    );
 
     let bundle = compile_verification(&ir);
     let diags = field(&bundle, "diagnostics")
@@ -999,7 +1042,10 @@ fn oracle_10a_e601_fires_once_for_a_duplicated_property_name() {
         e601[0].assoc("severity").and_then(|s| s.as_sym()),
         Some("error")
     );
-    let message = e601[0].assoc("message").and_then(|s| s.as_str()).unwrap_or("");
+    let message = e601[0]
+        .assoc("message")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
     assert!(
         message.contains("hand/acceptance/dup/property/dup"),
         "E601 message must name the duplicated obligation id, got: {}",
@@ -1035,7 +1081,12 @@ fn sample_attempt() -> Attempt {
         prompt_fingerprint: "fnv1a64:111".to_string(),
         response_length: 42,
         response_fingerprint: "fnv1a64:222".to_string(),
-        diagnostics: vec![diag_sexpr("error", "E514", (0, 0), "bad output".to_string())],
+        diagnostics: vec![diag_sexpr(
+            "error",
+            "E514",
+            (0, 0),
+            "bad output".to_string(),
+        )],
         status: AttemptStatus::Rejected,
     }
 }
@@ -1090,7 +1141,10 @@ fn remove_field(sexpr: &Sexpr, key: &str) -> Sexpr {
             let mut outer = outer.clone();
             if let Sexpr::List(inner) = &mut outer[1] {
                 inner.retain(|pair| {
-                    pair.as_list().and_then(|p| p.first()).and_then(|s| s.as_sym()) != Some(key)
+                    pair.as_list()
+                        .and_then(|p| p.first())
+                        .and_then(|s| s.as_sym())
+                        != Some(key)
                 });
             }
             Sexpr::List(outer)

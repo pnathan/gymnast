@@ -106,8 +106,21 @@ pub struct Attempt {
     pub status: AttemptStatus,
 }
 
+/// The exact set of field keys `Attempt::from_sexpr` accepts. Any other
+/// key present in a `(attempt (...))` value's field list is rejected —
+/// the phase-5 gate's finding 11 lesson: an unknown field must be
+/// visible as a read failure, never silently dropped.
+const ATTEMPT_FIELDS: [&str; 6] = [
+    "number",
+    "prompt-fingerprint",
+    "response-length",
+    "response-fingerprint",
+    "diagnostics",
+    "status",
+];
+
 impl Attempt {
-    fn to_sexpr(&self) -> Sexpr {
+    pub fn to_sexpr(&self) -> Sexpr {
         Sexpr::list(vec![
             Sexpr::sym("attempt"),
             Sexpr::list(vec![
@@ -125,6 +138,48 @@ impl Attempt {
                 Sexpr::pair("status", Sexpr::sym(attempt_status_symbol(self.status))),
             ]),
         ])
+    }
+
+    /// STRICT reader: `None` on anything that is not exactly an
+    /// `(attempt ((k v) ...))` value carrying all six `ATTEMPT_FIELDS`
+    /// keys and no others, with every value the right shape/type.
+    /// Round-trips against `to_sexpr` (`cache_oracle_test.rs` oracle
+    /// 11a/11b/11c).
+    pub fn from_sexpr(s: &Sexpr) -> Option<Attempt> {
+        let outer = s.as_list()?;
+        if outer.len() != 2 || outer[0].as_sym() != Some("attempt") {
+            return None;
+        }
+        let fields = outer[1].as_list()?;
+        for pair in fields {
+            let kv = pair.as_list()?;
+            if kv.len() != 2 {
+                return None;
+            }
+            let key = kv[0].as_sym()?;
+            if !ATTEMPT_FIELDS.contains(&key) {
+                return None;
+            }
+        }
+        let inner = &outer[1];
+        let number = u32::try_from(inner.assoc("number")?.as_int()?).ok()?;
+        let prompt_fingerprint = inner.assoc("prompt-fingerprint")?.as_str()?.to_string();
+        let response_length = inner.assoc("response-length")?.as_int()?;
+        let response_fingerprint = inner.assoc("response-fingerprint")?.as_str()?.to_string();
+        let diagnostics = inner.assoc("diagnostics")?.as_list()?.to_vec();
+        let status = match inner.assoc("status")?.as_sym()? {
+            "accepted" => AttemptStatus::Accepted,
+            "rejected" => AttemptStatus::Rejected,
+            _ => return None,
+        };
+        Some(Attempt {
+            number,
+            prompt_fingerprint,
+            response_length,
+            response_fingerprint,
+            diagnostics,
+            status,
+        })
     }
 }
 
@@ -144,20 +199,42 @@ fn run_status_symbol(status: RunStatus) -> &'static str {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunResult {
     pub node_id: String,
+    /// The plan node's contract fingerprint AT RUN TIME
+    /// (`docs/rust-port-plan-phase7.md` section F): `run_node` fills it
+    /// from `node.fingerprint`; `from_sexpr` requires it (never
+    /// defaults a missing one) so a stale/mismatched candidate can never
+    /// silently pass for a node whose contract has since moved.
+    pub node_fingerprint: String,
     pub status: RunStatus,
     pub attempts: Vec<Attempt>,
     pub candidate: Option<Sexpr>,
 }
 
+/// The exact set of field keys `RunResult::from_sexpr` accepts;
+/// `candidate` is the only OPTIONAL one (present iff `Some`).
+const RUN_RESULT_FIELDS: [&str; 5] = [
+    "node-id",
+    "node-fingerprint",
+    "status",
+    "attempts",
+    "candidate",
+];
+
 impl RunResult {
-    /// `(run-result ((node-id "...") (status s) (attempts (...))
-    /// [(candidate (...))]))` — the `candidate` entry is omitted entirely
-    /// when `None` (an exhausted run), never printed as `nil`, so a
-    /// caller can tell "no candidate" apart from "candidate is the empty
-    /// list" by field presence alone.
+    /// `(run-result ((node-id "...") (node-fingerprint "...") (status s)
+    /// (attempts (...)) [(candidate (...))]))` — `node-fingerprint` is
+    /// serialized immediately after `node-id` and before `status`
+    /// (`docs/rust-port-plan-phase7.md` section F); the `candidate`
+    /// entry is omitted entirely when `None` (an exhausted run), never
+    /// printed as `nil`, so a caller can tell "no candidate" apart from
+    /// "candidate is the empty list" by field presence alone.
     pub fn to_sexpr(&self) -> Sexpr {
         let mut items = vec![
             Sexpr::pair("node-id", Sexpr::Str(self.node_id.clone())),
+            Sexpr::pair(
+                "node-fingerprint",
+                Sexpr::Str(self.node_fingerprint.clone()),
+            ),
             Sexpr::pair("status", Sexpr::sym(run_status_symbol(self.status))),
             Sexpr::pair(
                 "attempts",
@@ -168,6 +245,51 @@ impl RunResult {
             items.push(Sexpr::pair("candidate", candidate.clone()));
         }
         Sexpr::list(vec![Sexpr::sym("run-result"), Sexpr::list(items)])
+    }
+
+    /// STRICT reader: `None` on anything that is not exactly a
+    /// `(run-result ((k v) ...))` value carrying `node-id`,
+    /// `node-fingerprint`, `status`, and `attempts` (all required, no
+    /// exceptions -- a run-result missing `node-fingerprint` is
+    /// REJECTED, not defaulted, per section F) plus an optional
+    /// `candidate`, no other keys, and every value the right
+    /// shape/type. Round-trips against `to_sexpr`.
+    pub fn from_sexpr(s: &Sexpr) -> Option<RunResult> {
+        let outer = s.as_list()?;
+        if outer.len() != 2 || outer[0].as_sym() != Some("run-result") {
+            return None;
+        }
+        let fields = outer[1].as_list()?;
+        for pair in fields {
+            let kv = pair.as_list()?;
+            if kv.len() != 2 {
+                return None;
+            }
+            let key = kv[0].as_sym()?;
+            if !RUN_RESULT_FIELDS.contains(&key) {
+                return None;
+            }
+        }
+        let inner = &outer[1];
+        let node_id = inner.assoc("node-id")?.as_str()?.to_string();
+        let node_fingerprint = inner.assoc("node-fingerprint")?.as_str()?.to_string();
+        let status = match inner.assoc("status")?.as_sym()? {
+            "succeeded" => RunStatus::Succeeded,
+            "exhausted" => RunStatus::Exhausted,
+            _ => return None,
+        };
+        let mut attempts = Vec::new();
+        for a in inner.assoc("attempts")?.as_list()? {
+            attempts.push(Attempt::from_sexpr(a)?);
+        }
+        let candidate = inner.assoc("candidate").cloned();
+        Some(RunResult {
+            node_id,
+            node_fingerprint,
+            status,
+            attempts,
+            candidate,
+        })
     }
 }
 
@@ -419,6 +541,7 @@ pub fn run_node(
         if accepted {
             return RunResult {
                 node_id: node.id.clone(),
+                node_fingerprint: node.fingerprint.clone(),
                 status: RunStatus::Succeeded,
                 attempts,
                 candidate,
@@ -440,6 +563,7 @@ pub fn run_node(
 
     RunResult {
         node_id: node.id.clone(),
+        node_fingerprint: node.fingerprint.clone(),
         status: RunStatus::Exhausted,
         attempts,
         candidate: None,

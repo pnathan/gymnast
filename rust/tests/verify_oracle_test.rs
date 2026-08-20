@@ -159,6 +159,16 @@ fn result_status(r: &Sexpr) -> String {
         .to_string()
 }
 
+// INTEGRATOR RESOLUTION (phase 7, sections E-F integrator; see
+// `docs/rust-port-plan-phase7.md` section A): phase 7 adds a required
+// `symbolic: bool` field to `TraceStep` (this is a phase-6 oracle file,
+// committed before that field existed). Every `step()` call site in this
+// file builds hand-constructed, fully-grounded synthetic steps that
+// never touch the tri-state evaluator, so `symbolic: false` is the only
+// value consistent with what these steps actually are; no assertion in
+// this file reads `.symbolic` or `basis`, so no test expectation
+// changes. This is a minimal compile-fix for the new required field,
+// not a semantic edit to any oracle assertion.
 fn step(transition_id: &str, outcome: Sexpr, pre: State, post: State) -> TraceStep {
     TraceStep {
         transition_id: transition_id.to_string(),
@@ -168,6 +178,7 @@ fn step(transition_id: &str, outcome: Sexpr, pre: State, post: State) -> TraceSt
         post_state: post,
         result: None,
         outcome,
+        symbolic: false,
     }
 }
 
@@ -387,23 +398,37 @@ fn oracle_03a_both_invariants_pass_over_todo_gym() {
         .collect();
     assert_eq!(invariant_obs.len(), 2);
 
+    // INTEGRATOR UPDATE (phase 7, sections E-F integrator;
+    // `docs/rust-port-plan-phase7.md` section A, phase-6 gate findings 1
+    // + 4): under the phase-6 BOOLEAN evaluator, an unrecognized/bare
+    // predicate head defaulted PERMISSIVELY to `true`, so both
+    // invariants dispatched to `passed`. Phase 7's tri-state evaluator
+    // makes that exact default `Unknown` instead of a laundered `true`,
+    // and invariant dispatch now yields the NEW `indeterminate` status
+    // (never `passed`/`failed`) whenever the deciding verdict is
+    // `Unknown` -- this is the deliberate, plan-mandated fix for
+    // findings 1+4, not a regression. Both of todo.gym's invariants hit
+    // exactly that case:
+    //
     // owner_isolation's :always is the bare atom
-    // `no_observation_without_active_membership` -> holds trivially
-    // (row 1 of the predicate table) both initially and after every
-    // transition, regardless of the transition's effect.
+    // `no_observation_without_active_membership` -- not `(= ..)`/`(not
+    // ..)`/`(and ..)`/`(or ..)`/`(< ..)`/`(<= ..)` -- so `eval_predicate3`
+    // returns `Unknown` both initially and after every transition.
     //
     // sharing_limit's :always is `(forall ((list TodoList)) (<= ...))`
-    // -- headed by `forall`, which is not one of the closed evaluator's
-    // special heads (=, not, and, or, <, <=) -- so it falls into "row 6"
-    // (anything else defaults to true) and ALSO holds trivially, always.
+    // -- headed by `forall`, likewise not a special head -- so it is
+    // ALSO `Unknown`, always.
     //
-    // So both invariant obligations must dispatch to `passed`.
+    // So both invariant obligations must dispatch to `indeterminate`,
+    // with `basis symbolic` and no counterexample (same empty-list shape
+    // as `passed`) -- pinned by `evaluator3_oracle_test.rs`'s own
+    // todo.gym end-to-end derivation, reproduced here for `verify_obligation`.
     for ob in invariant_obs {
         let result = verify_obligation(&ir, ob);
         assert_eq!(
             result_status(&result),
-            "passed",
-            "{}: expected passed, got {:?}",
+            "indeterminate",
+            "{}: expected indeterminate, got {:?}",
             obligation_id(ob),
             result
         );
@@ -490,36 +515,38 @@ fn oracle_03c_model_obligation_skipped_deferred_verification_hand_built() {
     assert!(joined.contains("model"));
 }
 
-// DERIVATION (see the file header, ambiguity 5, and
-// `tests/fixtures/todo-ir.sexpr` for the raw clause shapes these read):
+// INTEGRATOR UPDATE (phase 7, sections E-F integrator;
+// `docs/rust-port-plan-phase7.md` section B): operation matching is no
+// longer EXACT -- a step op `s` now matches a transition operation `op`
+// when `op == s` OR `op` ends with `"/" + s` (the suffix rule), making
+// todo.gym's bare-helper-name execute steps actually reach their
+// slash-qualified transitions where a unique suffix exists. This is the
+// plan's deliberate fix for phase-6 gate finding 5 ("no valid `.gym`
+// syntax can express an execute step matching a slash-qualified
+// operation, so all trace machinery is currently dead"), re-derived here
+// exactly as `docs/rust-port-plan-phase7.md` section B and
+// `evaluator3_oracle_test.rs`'s own todo.gym derivation spell out:
 //
 // create_then_read: :execute ((create_task actor task) (query_tasks
-//   actor task/list)). Its first element, (create_task actor task), IS
-//   itself a list -> the multi-step case: two trace steps,
-//   (create_task actor task) and (query_tasks actor task/list). Each
-//   step's op-name (car) is a BARE symbol ("create_task"/"query_tasks")
-//   while the only behavior transitions carry QUALIFIED operations
-//   ("todo_service/create_task"; there is no "query_tasks" behavior
-//   transition at all -- query_tasks is a query in the interface, not a
-//   behavior). Operation matching is EXACT (section A) -> both steps
-//   produce a no-matching-transition violation -> the trace has 2
-//   violations -> the property is `failed`, with 2 counterexamples.
+//   actor task/list)) -- two trace steps. `create_task` now uniquely
+//   suffix-matches `todo_service/create_task` and applies cleanly;
+//   `query_tasks` still matches nothing (no behavior transition declares
+//   it -- query_tasks is a query in the interface, not a behavior) ->
+//   ONE no-matching-transition violation (not two) -> the property is
+//   still `failed`, now with ONE counterexample.
 //
-// viewer_cannot_mutate: :execute (create_task actor task). Its first
-//   element, the symbol `create_task`, is NOT a list -> the single-step
-//   case: the whole execute value is the one step, (create_task actor
-//   task). Same bare-vs-qualified mismatch -> 1 violation -> `failed`
-//   with 1 counterexample.
+// viewer_cannot_mutate: :execute (create_task actor task) -- the single
+//   step case. `create_task` suffix-matches uniquely and applies cleanly
+//   -> ZERO violations -> the property now `passed` (with `basis
+//   symbolic`, since its precondition evaluation rested on an abstract
+//   actor/task), with ZERO counterexamples -- superseding the phase-6
+//   EXACT-match pinning below.
 //
-// sharing_boundary (scenario): clause tail is (given ((owner
-//   authenticated_owner))) (when (invite_distinct owner 256)) (then
-//   succeeds) (when (invite_distinct owner 257)) (then (fails_with
-//   sharing_limit)). Per section B, scenario steps are the `when`
-//   entries' action lists (each `when`'s second element, here always a
-//   list): (invite_distinct owner 256) and (invite_distinct owner 257).
-//   op-name "invite_distinct" never matches the qualified
-//   "todo_service/invite" -> 2 violations -> `failed` with 2
-//   counterexamples.
+// sharing_boundary (scenario): steps are (invite_distinct owner 256) and
+//   (invite_distinct owner 257). "invite_distinct" does NOT suffix-match
+//   "todo_service/invite" (the transition's operation does not end with
+//   "/invite_distinct") -> still 2 violations -> still `failed` with 2
+//   counterexamples, UNCHANGED by the suffix rule.
 #[test]
 fn oracle_03d_property_and_scenario_statuses_pinned_failed_no_matching_transition() {
     let ir = load_todo_ir();
@@ -533,7 +560,6 @@ fn oracle_03d_property_and_scenario_statuses_pinned_failed_no_matching_transitio
 
     for id in [
         "todo/acceptance/production/property/create_then_read",
-        "todo/acceptance/production/property/viewer_cannot_mutate",
         "todo/acceptance/production/scenario/sharing_boundary",
     ] {
         let ob = by_id(id);
@@ -547,6 +573,21 @@ fn oracle_03d_property_and_scenario_statuses_pinned_failed_no_matching_transitio
         );
     }
 
+    // viewer_cannot_mutate's sole step now suffix-matches and applies
+    // cleanly, so it PASSES under phase 7 -- it no longer belongs in the
+    // "still failed" loop above.
+    let vcm = verify_obligation(
+        &ir,
+        by_id("todo/acceptance/production/property/viewer_cannot_mutate"),
+    );
+    assert_eq!(
+        result_status(&vcm),
+        "passed",
+        "viewer_cannot_mutate: create_task now suffix-matches uniquely and applies cleanly, \
+         expected passed, got {:?}",
+        vcm
+    );
+
     let ctr = verify_obligation(
         &ir,
         by_id("todo/acceptance/production/property/create_then_read"),
@@ -556,21 +597,18 @@ fn oracle_03d_property_and_scenario_statuses_pinned_failed_no_matching_transitio
         .expect("counterexamples must be a list");
     assert_eq!(
         ctr_ces.len(),
-        2,
-        "create_then_read: two unmatched steps -> two counterexamples"
+        1,
+        "create_then_read: create_task now matches; only query_tasks is unmatched -> one \
+         counterexample"
     );
 
-    let vcm = verify_obligation(
-        &ir,
-        by_id("todo/acceptance/production/property/viewer_cannot_mutate"),
-    );
     let vcm_ces = field(&vcm, "counterexamples")
         .and_then(|c| c.as_list())
         .expect("counterexamples must be a list");
     assert_eq!(
         vcm_ces.len(),
-        1,
-        "viewer_cannot_mutate: one unmatched step -> one counterexample"
+        0,
+        "viewer_cannot_mutate: no violation -> no counterexamples"
     );
 
     let sb = verify_obligation(
@@ -583,7 +621,8 @@ fn oracle_03d_property_and_scenario_statuses_pinned_failed_no_matching_transitio
     assert_eq!(
         sb_ces.len(),
         2,
-        "sharing_boundary: two unmatched `when` steps -> two counterexamples"
+        "sharing_boundary: invite_distinct still matches nothing under the suffix rule -> two \
+         unmatched `when` steps -> two counterexamples, unchanged"
     );
 }
 
@@ -1001,17 +1040,29 @@ fn oracle_06a_bundle_summary_and_schema_over_todo_gym() {
     let passed = field(summary, "passed").and_then(|s| s.as_int()).unwrap();
     let failed = field(summary, "failed").and_then(|s| s.as_int()).unwrap();
     let skipped = field(summary, "skipped").and_then(|s| s.as_int()).unwrap();
+    // INTEGRATOR UPDATE (phase 7, sections E-F integrator;
+    // `docs/rust-port-plan-phase7.md` section A): the summary gains a
+    // NEW `indeterminate` count between `skipped` and the bundle's own
+    // `fingerprint` field; a well-formed phase-7 bundle's four old
+    // counts no longer sum to `total` on their own.
+    let indeterminate = field(summary, "indeterminate")
+        .and_then(|s| s.as_int())
+        .expect("phase 7: summary must carry an `indeterminate` count");
 
     assert_eq!(total, 9);
-    assert_eq!(passed + failed + skipped, total);
+    assert_eq!(passed + failed + skipped + indeterminate, total);
 
-    // Derived exactly (see oracle_03* above): 2 invariants pass, 2
-    // properties + 1 scenario fail (bare-vs-qualified
-    // no-matching-transition), 1 concurrency + 1 fault + 1 coverage + 1
-    // constraint are skipped.
-    assert_eq!(passed, 2);
-    assert_eq!(failed, 3);
+    // Re-derived under phase 7 (see oracle_03a/oracle_03d above, and
+    // `docs/rust-port-plan-phase7.md` sections A+B): both invariants are
+    // now `indeterminate` (not `passed` -- the tri-state evaluator's
+    // honest fix for phase-6 gate findings 1+4); viewer_cannot_mutate now
+    // `passed` (the suffix-match rule's fix for finding 5), leaving only
+    // create_then_read + sharing_boundary `failed`; the 4 skipped
+    // (concurrency/fault/coverage/constraint) are unchanged.
+    assert_eq!(passed, 1);
+    assert_eq!(failed, 2);
     assert_eq!(skipped, 4);
+    assert_eq!(indeterminate, 2);
 
     let results = field(&bundle, "results")
         .and_then(|r| r.as_list())

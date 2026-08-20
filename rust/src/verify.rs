@@ -29,11 +29,13 @@
 //! convention.
 
 use crate::diag::diag_sexpr;
+use crate::fingerprint;
 use crate::ir::{Ir, IrNode};
 use crate::sexpr::Sexpr;
 use crate::transition::{
-    self, apply_transition, counterexample, default_trace_step, execute_trace, extract_transitions,
-    make_initial_state, state_to_sexpr, trace_to_sexpr, Trace, TraceStep,
+    self, apply_transition, counterexample, default_trace_step, eval_predicate3, execute_trace,
+    extract_transitions, make_initial_state, state_to_sexpr, trace_to_sexpr, Trace, TraceStep,
+    Verdict,
 };
 
 /// Schema tag for the compiled verification bundle.
@@ -540,11 +542,28 @@ fn verify_property_against_reference(ir: &Ir, obligation: &Sexpr) -> Sexpr {
 
     let steps = execute_steps(&execute);
     let trace = execute_trace(ir, &steps);
+    // Property basis (plan section A): symbolic iff any executed step's
+    // own guard evaluation rested on a permissive default.
+    let symbolic = trace.steps.iter().any(|s| s.symbolic);
     if trace.violations.is_empty() {
-        make_verification_result(&ob_id, "passed", Some(&trace), vec![], vec![])
+        make_verification_result_with_basis(
+            &ob_id,
+            "passed",
+            Some(&trace),
+            vec![],
+            vec![],
+            Some(symbolic),
+        )
     } else {
         let ces = counterexamples_for_trace(&trace);
-        make_verification_result(&ob_id, "failed", Some(&trace), ces, vec![])
+        make_verification_result_with_basis(
+            &ob_id,
+            "failed",
+            Some(&trace),
+            ces,
+            vec![],
+            Some(symbolic),
+        )
     }
 }
 
@@ -589,17 +608,41 @@ fn verify_scenario_against_reference(ir: &Ir, obligation: &Sexpr) -> Sexpr {
     }
 
     let trace = execute_trace(ir, &trace_steps);
+    // Scenario basis (plan section A): symbolic iff any executed step's
+    // own guard evaluation rested on a permissive default.
+    let symbolic = trace.steps.iter().any(|s| s.symbolic);
     if trace.violations.is_empty() {
-        make_verification_result(&ob_id, "passed", Some(&trace), vec![], vec![])
+        make_verification_result_with_basis(
+            &ob_id,
+            "passed",
+            Some(&trace),
+            vec![],
+            vec![],
+            Some(symbolic),
+        )
     } else {
         let ces = counterexamples_for_trace(&trace);
-        make_verification_result(&ob_id, "failed", Some(&trace), ces, vec![])
+        make_verification_result_with_basis(
+            &ob_id,
+            "failed",
+            Some(&trace),
+            ces,
+            vec![],
+            Some(symbolic),
+        )
     }
 }
-/// Verifies an invariant obligation: its `:always` predicate against
-/// `make_initial_state`, then (if the initial state holds) against the
-/// post-state of applying EVERY extracted transition once (actor/input
-/// `None`) to that same initial state -- first violation loses.
+/// Verifies an invariant obligation using the TRI-STATE evaluator
+/// (`docs/rust-port-plan-phase7.md` section A): its `:always` predicate
+/// against `make_initial_state`, then (if the initial state `Holds`)
+/// against the post-state of applying EVERY extracted transition once
+/// (actor/input `None`) to that same initial state, in order -- the
+/// first check point whose verdict is not `Holds` decides the result:
+/// `Fails` yields `failed` (basis `checked`, a grounded violation);
+/// `Unknown` yields the new `indeterminate` status (basis `symbolic`)
+/// rather than the phase-6 behavior of laundering a permissive default
+/// into a `passed`/`failed` verdict (phase-6 gate, findings 1 and 4).
+/// `Holds` at every check point yields `passed` (basis `checked`).
 fn verify_invariant_obligation(ir: &Ir, obligation: &Sexpr) -> Sexpr {
     let ob_id = obligation_id_str(obligation);
     let predicate = obligation_field(obligation, "predicate")
@@ -607,58 +650,73 @@ fn verify_invariant_obligation(ir: &Ir, obligation: &Sexpr) -> Sexpr {
         .unwrap_or_else(nil);
     let state = make_initial_state(ir);
 
-    // Basis tracking (phase-6 gate, finding 1): a verdict that rested on
-    // any permissive evaluator default is SYMBOLIC, not evidence, and the
-    // published result must say so — the verifier never claims more than
-    // it checked.
-    let (holds_initial, initial_checked) =
-        crate::transition::eval_predicate_basis(&predicate, &state, None, None);
-    let mut symbolic = !initial_checked;
-
-    if !holds_initial {
-        let ce = Sexpr::List(vec![
-            Sexpr::sym("normalized-counterexample"),
-            Sexpr::pair("obligation-id", Sexpr::Str(ob_id.clone())),
-            Sexpr::pair("divergence-type", Sexpr::sym("invariant-violation")),
-            Sexpr::pair("predicate", predicate.clone()),
-            Sexpr::pair("state", state_to_sexpr(&state)),
-        ]);
-        return make_verification_result_with_basis(
-            &ob_id,
-            "failed",
-            None,
-            vec![ce],
-            basis_diagnostics(symbolic, &predicate, &ob_id),
-            Some(symbolic),
-        );
-    }
-
-    let transitions = extract_transitions(ir);
-    for t in &transitions {
-        let step = apply_transition(t, &state, None, None);
-        let (holds_post, post_checked) =
-            crate::transition::eval_predicate_basis(&predicate, &step.post_state, None, None);
-        symbolic = symbolic || !post_checked;
-        if !holds_post {
+    match eval_predicate3(&predicate, &state, None, None) {
+        Verdict::Fails => {
             let ce = Sexpr::List(vec![
                 Sexpr::sym("normalized-counterexample"),
                 Sexpr::pair("obligation-id", Sexpr::Str(ob_id.clone())),
-                Sexpr::pair(
-                    "divergence-type",
-                    Sexpr::sym("invariant-violation-post-transition"),
-                ),
+                Sexpr::pair("divergence-type", Sexpr::sym("invariant-violation")),
                 Sexpr::pair("predicate", predicate.clone()),
-                Sexpr::pair("state", state_to_sexpr(&step.post_state)),
-                Sexpr::pair("transition", Sexpr::Str(t.id.clone())),
+                Sexpr::pair("state", state_to_sexpr(&state)),
             ]);
             return make_verification_result_with_basis(
                 &ob_id,
                 "failed",
                 None,
                 vec![ce],
-                basis_diagnostics(symbolic, &predicate, &ob_id),
-                Some(symbolic),
+                basis_diagnostics(false, &predicate, &ob_id),
+                Some(false),
             );
+        }
+        Verdict::Unknown => {
+            return make_verification_result_with_basis(
+                &ob_id,
+                "indeterminate",
+                None,
+                vec![],
+                basis_diagnostics(true, &predicate, &ob_id),
+                Some(true),
+            );
+        }
+        Verdict::Holds => {}
+    }
+
+    let transitions = extract_transitions(ir);
+    for t in &transitions {
+        let step = apply_transition(t, &state, None, None);
+        match eval_predicate3(&predicate, &step.post_state, None, None) {
+            Verdict::Fails => {
+                let ce = Sexpr::List(vec![
+                    Sexpr::sym("normalized-counterexample"),
+                    Sexpr::pair("obligation-id", Sexpr::Str(ob_id.clone())),
+                    Sexpr::pair(
+                        "divergence-type",
+                        Sexpr::sym("invariant-violation-post-transition"),
+                    ),
+                    Sexpr::pair("predicate", predicate.clone()),
+                    Sexpr::pair("state", state_to_sexpr(&step.post_state)),
+                    Sexpr::pair("transition", Sexpr::Str(t.id.clone())),
+                ]);
+                return make_verification_result_with_basis(
+                    &ob_id,
+                    "failed",
+                    None,
+                    vec![ce],
+                    basis_diagnostics(false, &predicate, &ob_id),
+                    Some(false),
+                );
+            }
+            Verdict::Unknown => {
+                return make_verification_result_with_basis(
+                    &ob_id,
+                    "indeterminate",
+                    None,
+                    vec![],
+                    basis_diagnostics(true, &predicate, &ob_id),
+                    Some(true),
+                );
+            }
+            Verdict::Holds => continue,
         }
     }
     make_verification_result_with_basis(
@@ -666,8 +724,8 @@ fn verify_invariant_obligation(ir: &Ir, obligation: &Sexpr) -> Sexpr {
         "passed",
         None,
         vec![],
-        basis_diagnostics(symbolic, &predicate, &ob_id),
-        Some(symbolic),
+        basis_diagnostics(false, &predicate, &ob_id),
+        Some(false),
     )
 }
 
@@ -1026,12 +1084,66 @@ fn result_status(r: &Sexpr) -> &str {
     r.assoc("status").and_then(|s| s.as_sym()).unwrap_or("")
 }
 
-/// Compiles the full verification bundle: lowers every obligation, runs
-/// `verify_obligation` over each, tallies pass/fail/skip, and folds in
-/// the first acceptance node's environment diagnostics and coverage
-/// analysis. Pure and deterministic -- no fingerprint field (the Lamedh
-/// reference has none either).
-pub fn compile_verification(ir: &Ir) -> Sexpr {
+/// `E601 duplicate-obligation-id`: one error diagnostic per SECOND (and
+/// later) occurrence of an obligation id already seen earlier in
+/// `obligations` (plan section D) -- cache keys and assembly evidence
+/// depend on id uniqueness, so a collision must be visible in the
+/// bundle's own diagnostics rather than silently overwriting a lookup
+/// downstream. A linear scan against a growing `Vec` (not a `HashSet`):
+/// obligation counts are small and this keeps the diagnostic order
+/// (and therefore the whole bundle's serialization) dependent only on
+/// `obligations`' own deterministic order, never on hash iteration.
+fn duplicate_obligation_diagnostics(obligations: &[Sexpr]) -> Vec<Sexpr> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut diags = Vec::new();
+    for o in obligations {
+        let id = obligation_id_str(o);
+        if seen.iter().any(|s| *s == id) {
+            diags.push(diag_sexpr(
+                "error",
+                "E601",
+                (0, 0),
+                format!("duplicate-obligation-id: {}", id),
+            ));
+        } else {
+            seen.push(id);
+        }
+    }
+    diags
+}
+
+/// The bundle's typed summary counts (plan section D), for phase-8
+/// assembly to read without re-parsing the raw `Sexpr`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerificationSummary {
+    pub total: i64,
+    pub passed: i64,
+    pub failed: i64,
+    pub skipped: i64,
+    pub indeterminate: i64,
+}
+
+/// Reads a `verification-bundle`'s `summary` field into a
+/// `VerificationSummary`. Total: `None` on any shape mismatch (not a
+/// `verification-bundle`, no `summary` field, or a missing/non-`Int`
+/// count) rather than panicking.
+pub fn bundle_summary(bundle: &Sexpr) -> Option<VerificationSummary> {
+    let inner = bundle.as_list()?.get(1)?;
+    let summary = inner.assoc("summary")?;
+    Some(VerificationSummary {
+        total: summary.assoc("total")?.as_int()?,
+        passed: summary.assoc("passed")?.as_int()?,
+        failed: summary.assoc("failed")?.as_int()?,
+        skipped: summary.assoc("skipped")?.as_int()?,
+        indeterminate: summary.assoc("indeterminate")?.as_int()?,
+    })
+}
+
+/// Builds the bundle WITHOUT its `fingerprint` field -- the form the
+/// fingerprint itself is computed over, so the two can never drift
+/// (`Ir`/`Plan`'s own discipline, now extended to the verification
+/// bundle per plan section D).
+fn compile_verification_without_fingerprint(ir: &Ir) -> Sexpr {
     let obligations = lower_all_obligations(ir);
     let results: Vec<Sexpr> = obligations
         .iter()
@@ -1050,6 +1162,10 @@ pub fn compile_verification(ir: &Ir) -> Sexpr {
         .iter()
         .filter(|r| result_status(r) == "skipped")
         .count();
+    let indeterminate = results
+        .iter()
+        .filter(|r| result_status(r) == "indeterminate")
+        .count();
     let total = obligations.len();
 
     let acc_nodes = ir.nodes_of_kind("acceptance");
@@ -1062,6 +1178,8 @@ pub fn compile_verification(ir: &Ir) -> Sexpr {
     };
 
     let coverage = coverage_gaps(ir, &obligations);
+    let transition_diags = transition::check_transition_refs(ir);
+    let bundle_diags = duplicate_obligation_diagnostics(&obligations);
 
     Sexpr::List(vec![
         Sexpr::sym("verification-bundle"),
@@ -1076,10 +1194,20 @@ pub fn compile_verification(ir: &Ir) -> Sexpr {
                     Sexpr::pair("passed", Sexpr::Int(passed as i64)),
                     Sexpr::pair("failed", Sexpr::Int(failed as i64)),
                     Sexpr::pair("skipped", Sexpr::Int(skipped as i64)),
+                    Sexpr::pair("indeterminate", Sexpr::Int(indeterminate as i64)),
                 ]),
             ),
             Sexpr::pair("coverage", coverage),
             Sexpr::pair("environment-diagnostics", Sexpr::List(env_diags)),
+            // W406 unresolved-state-ref warnings (plan section C): every
+            // `reads`/`writes` entry that names no `state` node, so the
+            // calculus's total-but-silent write-to-undeclared behavior
+            // becomes visible in the artifact.
+            Sexpr::pair("transition-diagnostics", Sexpr::List(transition_diags)),
+            // The bundle's own diagnostics (plan section D: E601
+            // duplicate-obligation-id), distinct from `source-diagnostics`
+            // below (the IR's diagnostics, unrelated to this bundle).
+            Sexpr::pair("diagnostics", Sexpr::List(bundle_diags)),
             // The bundle is self-describing (phase-6 gate, finding 3): a
             // bundle built over an IR carrying error diagnostics says so
             // in the artifact itself, not only in a process exit code
@@ -1087,6 +1215,28 @@ pub fn compile_verification(ir: &Ir) -> Sexpr {
             Sexpr::pair("source-diagnostics", Sexpr::List(ir.diagnostics.clone())),
         ]),
     ])
+}
+
+/// Compiles the full verification bundle: lowers every obligation, runs
+/// `verify_obligation` over each, tallies pass/fail/skip/indeterminate,
+/// and folds in the first acceptance node's environment diagnostics,
+/// transition ref-check warnings, duplicate-obligation-id diagnostics,
+/// and coverage analysis. Pure and deterministic. Builds on the
+/// fingerprint-free form so the two can never drift, exactly the
+/// `Ir`/`Plan` discipline (plan section D; the delta doc's "no
+/// fingerprint field" note is superseded by this contract).
+pub fn compile_verification(ir: &Ir) -> Sexpr {
+    let base = compile_verification_without_fingerprint(ir);
+    let fp = fingerprint::fingerprint(&base);
+    match base {
+        Sexpr::List(mut outer) => {
+            if let Some(Sexpr::List(items)) = outer.last_mut() {
+                items.push(Sexpr::pair("fingerprint", Sexpr::Str(fp)));
+            }
+            Sexpr::List(outer)
+        }
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -1171,6 +1321,7 @@ mod tests {
             post_state: vec![],
             result: None,
             outcome: Sexpr::List(vec![Sexpr::sym("succeeded")]),
+            symbolic: false,
         };
         let divs = compare_traces(&[step.clone(), step.clone()], &[step]);
         assert_eq!(divs.len(), 1);

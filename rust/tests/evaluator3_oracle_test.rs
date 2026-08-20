@@ -63,9 +63,8 @@ use gymnast_rs::ir::{Ir, IrNode};
 use gymnast_rs::parser;
 use gymnast_rs::sexpr::Sexpr;
 use gymnast_rs::transition::{
-    apply_transition, check_transition_refs, eval_predicate, eval_predicate3,
-    eval_predicate_basis, execute_trace, extract_transitions, make_initial_state, State,
-    Transition, Verdict,
+    apply_transition, check_transition_refs, eval_predicate, eval_predicate3, eval_predicate_basis,
+    execute_trace, extract_transitions, make_initial_state, State, Transition, Verdict,
 };
 use gymnast_rs::verify::{compile_verification, lower_all_obligations, verify_obligation};
 use std::fs;
@@ -173,7 +172,10 @@ fn result_basis(r: &Sexpr) -> Option<String> {
 #[test]
 fn oracle_01a_verdict3_nil_and_atoms_are_unknown() {
     let state = sample_state();
-    assert_eq!(eval_predicate3(&nil(), &state, None, None), Verdict::Unknown);
+    assert_eq!(
+        eval_predicate3(&nil(), &state, None, None),
+        Verdict::Unknown
+    );
     assert_eq!(
         eval_predicate3(&Sexpr::sym("some_atom"), &state, None, None),
         Verdict::Unknown
@@ -520,7 +522,10 @@ fn corpus() -> Vec<Corpus> {
         // `checked` stays at its untouched initial value `true`.
         Corpus {
             name: "(and (= 1 1) (= 2 2))",
-            pred: call("and", vec![holds.clone(), call("=", vec![Sexpr::Int(2), Sexpr::Int(2)])]),
+            pred: call(
+                "and",
+                vec![holds.clone(), call("=", vec![Sexpr::Int(2), Sexpr::Int(2)])],
+            ),
             verdict: Verdict::Holds,
             boolean: true,
             checked: true,
@@ -556,7 +561,10 @@ fn corpus() -> Vec<Corpus> {
         },
         Corpus {
             name: "(or (= 1 2) (= 3 4))",
-            pred: call("or", vec![fails.clone(), call("=", vec![Sexpr::Int(3), Sexpr::Int(4)])]),
+            pred: call(
+                "or",
+                vec![fails.clone(), call("=", vec![Sexpr::Int(3), Sexpr::Int(4)])],
+            ),
             verdict: Verdict::Fails,
             boolean: false,
             checked: true,
@@ -775,7 +783,10 @@ fn oracle_03c_bundle_summary_gains_indeterminate_and_totals_match() {
         2,
         "summary must gain an (indeterminate N) entry after skipped"
     );
-    assert_eq!(get("passed") + get("failed") + get("skipped") + get("indeterminate"), get("total"));
+    assert_eq!(
+        get("passed") + get("failed") + get("skipped") + get("indeterminate"),
+        get("total")
+    );
 }
 
 // DERIVATION (section C): the only `state` node is `todo_state`; every
@@ -797,7 +808,10 @@ fn oracle_03d_check_transition_refs_exactly_six_w406_over_todo_gym() {
     );
     for w in &warnings {
         assert_eq!(w.assoc("code").and_then(|c| c.as_str()), Some("W406"));
-        assert_eq!(w.assoc("severity").and_then(|s| s.as_sym()), Some("warning"));
+        assert_eq!(
+            w.assoc("severity").and_then(|s| s.as_sym()),
+            Some("warning")
+        );
     }
     let expected_pairs: &[(&str, &str, usize)] = &[
         ("todo/behavior/create_task", "memberships", 1),
@@ -832,12 +846,14 @@ fn oracle_03e_bundle_transition_diagnostics_after_environment_diagnostics_e601_a
         .and_then(|v| v.as_list())
         .expect("bundle must nest one field list");
     let key_at = |k: &str| {
-        inner.iter().position(|p| {
-            p.as_list().and_then(|x| x.first()).and_then(|s| s.as_sym()) == Some(k)
-        })
+        inner
+            .iter()
+            .position(|p| p.as_list().and_then(|x| x.first()).and_then(|s| s.as_sym()) == Some(k))
     };
-    let env_idx = key_at("environment-diagnostics").expect("bundle must carry environment-diagnostics");
-    let trans_idx = key_at("transition-diagnostics").expect("bundle must carry transition-diagnostics");
+    let env_idx =
+        key_at("environment-diagnostics").expect("bundle must carry environment-diagnostics");
+    let trans_idx =
+        key_at("transition-diagnostics").expect("bundle must carry transition-diagnostics");
     assert!(
         trans_idx > env_idx,
         "transition-diagnostics must be placed after environment-diagnostics"
@@ -897,7 +913,10 @@ fn oracle_04_ambiguous_operation_two_suffix_matches_records_violation_naming_bot
         s.outcome,
         Sexpr::list(vec![Sexpr::sym("ambiguous-operation"), Sexpr::sym("op")])
     );
-    assert_eq!(s.pre_state, s.post_state, "an ambiguous step never mutates state");
+    assert_eq!(
+        s.pre_state, s.post_state,
+        "an ambiguous step never mutates state"
+    );
 
     assert_eq!(trace.violations.len(), 1);
     let v = &trace.violations[0];
@@ -905,10 +924,7 @@ fn oracle_04_ambiguous_operation_two_suffix_matches_records_violation_naming_bot
         field(v, "type").and_then(|s| s.as_sym()),
         Some("ambiguous-operation")
     );
-    assert_eq!(
-        field(v, "operation").and_then(|s| s.as_sym()),
-        Some("op")
-    );
+    assert_eq!(field(v, "operation").and_then(|s| s.as_sym()), Some("op"));
     let candidates: Vec<&str> = field(v, "candidates")
         .and_then(|c| c.as_list())
         .expect("candidates must be a list")
