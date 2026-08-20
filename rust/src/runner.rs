@@ -616,11 +616,24 @@ pub fn run_generative_nodes(
 /// `no-error-diagnostics` check sees the failure. Results without a
 /// matching run result (structural nodes) pass through unchanged, in
 /// the original order. A run result whose node id matches no
-/// deterministic result is ignored (never invented into the list).
+/// deterministic result is ignored in release builds (never invented
+/// into the list) and trips a debug assertion — both lists derive
+/// from the same plan, so a mismatch is a caller bug.
 pub fn merge_run_results(
     results: &[crate::recipe::ExecutionResult],
     run_results: &[RunResult],
 ) -> Vec<crate::recipe::ExecutionResult> {
+    // Guard the one fail-open direction (phase-8 gate re-review, note
+    // 5): a run result whose node id matches no deterministic entry
+    // would silently vanish from what promotion sees. Unreachable from
+    // the CLI (both lists derive from the same plan), so a debug
+    // assertion — not a release-path branch — is the right teeth.
+    debug_assert!(
+        run_results
+            .iter()
+            .all(|rr| results.iter().any(|r| r.node_id == rr.node_id)),
+        "merge_run_results: run result for a node with no deterministic entry"
+    );
     results
         .iter()
         .map(|r| {

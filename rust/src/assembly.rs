@@ -413,8 +413,12 @@ pub fn default_promotion_policy() -> Sexpr {
 /// promotion path inside `compile`/`synthesize` evaluates the bundle
 /// it just assembled in-process. Any consumer reading a bundle back
 /// from disk MUST call `verify_bundle_fingerprint` first — the
-/// fingerprint is the tamper-evidence; this function checks structure,
-/// not provenance (documented in `docs/ir-contract-deltas.md`).
+/// fingerprint detects DRIFT and CORRUPTION; this function checks
+/// structure, not provenance (documented in
+/// `docs/ir-contract-deltas.md`). Neither is authentication: FNV-1a is
+/// unkeyed and stored inside the document it covers, so a deliberate
+/// tamperer can recompute it — authenticity needs a keyed MAC or
+/// signature, out of scope here.
 pub fn evaluate_promotion(policy: &Sexpr, bundle: &Sexpr) -> Sexpr {
     let body = bundle_body(bundle);
 
@@ -575,10 +579,13 @@ fn is_missing_artifact_diagnostic(d: &Sexpr) -> bool {
 
 /// Recomputes the bundle's fingerprint over its fingerprint-free form
 /// and compares: `true` only for a well-formed bundle whose trailing
-/// `fingerprint` field matches its own content. The tamper-evidence
-/// check for any consumer reading a bundle back from an untrusted
-/// medium (phase-8 gate, finding 2); the in-process
-/// assemble-then-evaluate path does not need it.
+/// `fingerprint` field matches its own content. The drift/corruption
+/// check for any consumer reading a bundle back from disk (phase-8
+/// gate, finding 2); the in-process assemble-then-evaluate path does
+/// not need it. NOT authentication: the fingerprint is unkeyed and
+/// travels inside the document, so a deliberate tamperer recomputes it
+/// — a keyed MAC or signature is required for that threat model
+/// (phase-8 gate re-review, residual 3).
 pub fn verify_bundle_fingerprint(bundle: &Sexpr) -> bool {
     let items = match bundle.as_list() {
         Some(items) if items.len() == 2 && items[0].as_sym() == Some("evidence-bundle") => items,
@@ -616,15 +623,15 @@ pub fn verify_bundle_fingerprint(bundle: &Sexpr) -> bool {
 }
 
 /// The two verification checks, computed together over the bundle's
-/// `verification` field: an absent field or a `nil` value is "no
+/// `verification` field: an explicit `(verification nil)` pair is "no
 /// verification section" (both vacuously true); a present section
 /// whose summary cannot be read fails both (fail-closed); otherwise
-/// `total > 0 && failed == 0` / `indeterminate == 0` respectively.
-/// The `total > 0` condition is the phase-8 gate's finding 4: a
-/// zero-obligation verification section is not evidence that anything
-/// passed — without it, a spec with no obligations at all would
-/// launder into `promote` exactly the way a fully-indeterminate one
-/// would have before the `no-indeterminate-verification` check.
+/// `passed + failed > 0 && failed == 0` / `indeterminate == 0`
+/// respectively. The executed-count condition is the phase-8 gate's
+/// finding 4 plus its re-review residual: a zero-obligation section is
+/// not evidence, and neither is an all-SKIPPED one — `skipped` means
+/// the verifier could not run the obligation, so a summary in which
+/// nothing actually executed must not read as "verification passed".
 fn verification_checks(body: Option<&Sexpr>) -> (bool, bool) {
     let section = match body.map(|b| assoc_unique(b, "verification")) {
         Some(Some(v)) => v,
@@ -636,7 +643,7 @@ fn verification_checks(body: Option<&Sexpr>) -> (bool, bool) {
     }
     match crate::verify::bundle_summary(section) {
         Some(summary) => (
-            summary.total > 0 && summary.failed == 0,
+            summary.passed + summary.failed > 0 && summary.failed == 0,
             summary.indeterminate == 0,
         ),
         None => (false, false),
@@ -659,7 +666,8 @@ fn entry_traced(entry: &Sexpr) -> bool {
 /// Assembles the evidence bundle (mirrors `gymnast-assemble-bundle`):
 /// artifacts, traceability, dependency lock, the verification bundle
 /// verbatim (or `nil`), a summary, and the concatenated diagnostics
-/// (artifact ++ capability ++ traceability, in that order), plus a
+/// (artifact ++ capability ++ traceability ++ execution-result
+/// diagnostics in result order), plus a
 /// trailing `fingerprint` over the fingerprint-free form (phase-7
 /// pattern verbatim; a deliberate delta — the reference bundle has no
 /// fingerprint).
@@ -715,6 +723,14 @@ fn assemble_bundle_without_fingerprint(
     let mut all_diags = artifact_diags;
     all_diags.extend(cap_diags);
     all_diags.extend(trace_diags);
+    // Execution-result diagnostics fold in LAST (result order) —
+    // phase-8 gate re-review, residual 2: without this, a merged
+    // synthesize bundle records THAT a node failed (failed-nodes) but
+    // never WHY (`synthesis-exhausted`, recipe errors), and
+    // `no-error-diagnostics` does not mean what its name says.
+    for result in results {
+        all_diags.extend(result.diagnostics.iter().cloned());
+    }
 
     let summary = Sexpr::list(vec![
         Sexpr::pair("total-nodes", Sexpr::Int(plan.nodes.len() as i64)),

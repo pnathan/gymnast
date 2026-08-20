@@ -134,7 +134,12 @@ fn gate1_merge_folds_succeeded_and_exhausted_runs_into_results() {
             node_fingerprint: "fnv1a64:4".into(),
             status: RunStatus::Exhausted,
             attempts: vec![],
-            candidate: None,
+            // Deliberately Some: run_node never sets a candidate on
+            // Exhausted, but the bridge must strip one anyway
+            // (belt-and-braces; phase-8 gate re-review, note 4 — with
+            // None here the candidate-stripping assertion below could
+            // never fail).
+            candidate: Some(candidate_with_file("m/plan/gen-b", "out/b.rb", "junk")),
         },
     ];
 
@@ -182,8 +187,39 @@ fn gate1_exhausted_run_blocks_promotion_via_error_diagnostic_and_failed_count() 
     }];
     let merged = merge_run_results(&results, &runs);
     let bundle = assemble_bundle(&ir, &p, &merged, None);
+    // The WHY reaches the bundle, not only the THAT (gate re-review,
+    // residual 2): execution-result diagnostics fold into the bundle's
+    // diagnostics, so the synthesis-exhausted error is evidence.
+    assert!(
+        bundle.print().contains("synthesis-exhausted"),
+        "the bundle must record why the node failed"
+    );
     let promotion = evaluate_promotion(&default_promotion_policy(), &bundle);
     assert_eq!(check_value(&promotion, "all-nodes-succeeded"), "nil");
+    assert_eq!(
+        check_value(&promotion, "no-error-diagnostics"),
+        "nil",
+        "the folded synthesis-exhausted error must fail the error census"
+    );
+    assert_eq!(decision_of(&promotion), "hold");
+}
+
+#[test]
+fn gate_residual1_all_skipped_verification_is_not_evidence() {
+    // (total 4, all skipped): nothing executed — the same vacuity
+    // class as total 0. verification-passed must be nil.
+    let bundle_text = r#"(evidence-bundle ((schema "gymnast.bundle/0.1")
+        (ir-fingerprint "fnv1a64:1") (plan-fingerprint "fnv1a64:2")
+        (artifacts nil) (traceability nil)
+        (dependency-lock (dependency-lock ((plan-fingerprint "fnv1a64:2") (node-locks nil))))
+        (verification (verification-bundle ((schema "gymnast.verify/0.1")
+          (summary ((total 4) (passed 0) (failed 0) (skipped 4) (indeterminate 0))))))
+        (summary ((total-nodes 0) (artifacts-produced 0) (succeeded-nodes 0)
+                  (failed-nodes 0) (has-verification t)))
+        (diagnostics nil) (fingerprint "fnv1a64:5")))"#;
+    let bundle = parse(bundle_text).expect("bundle parses");
+    let promotion = evaluate_promotion(&default_promotion_policy(), &bundle);
+    assert_eq!(check_value(&promotion, "verification-passed"), "nil");
     assert_eq!(decision_of(&promotion), "hold");
 }
 

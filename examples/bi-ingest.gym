@@ -1,0 +1,142 @@
+# A BI analytics ingest server, in the compact surface: producers push
+# analytics events through an authenticated ingest API; the service
+# deduplicates by event id, enforces per-source daily quotas, and
+# journals durably for downstream consumption in source order.
+
+spec bi_ingest = v 0.1 owner platform
+  exports SourceId, EventId, AnalyticsEvent, Source, ingest_service
+
+application bi_ingest = (modules bi_ingest, default_acceptance production)
+
+actor producer = service (identity api_key (key_id, secret_hash))
+
+mode SourceId = opaque text
+mode EventId  = opaque text
+mode SchemaId = opaque text
+mode BatchId  = opaque text
+mode Version  = opaque int
+mode Quota    = opaque int
+mode Cursor   = opaque text
+mode Page     = opaque text
+
+mode SourceState = enum (active, suspended, revoked)
+mode EventKind   = enum (track, identify, page_view, metric)
+
+mode OccurredAt = union (at zoned_datetime, day local_date)
+
+mode Source = struct (
+  SourceId id,
+  text (1..100) name,
+  SourceState state,
+  Quota daily_quota,
+  Version version )
+
+mode AnalyticsEvent = struct (
+  EventId id,
+  SourceId source,
+  SchemaId schema,
+  EventKind kind,
+  OccurredAt occurred_at,
+  text (..65536) payload,
+  Version version )
+
+mode IngestReceipt = struct (
+  BatchId batch,
+  EventId event,
+  Version offset )
+
+component ingest_app = (
+  responsibility "Accept, deduplicate, and durably journal analytics events",
+  provides ingest_service,
+  uses (api_key_registry, durable_store, clock, id_source) )
+
+interface ingest_service = for producer (
+  cmd ingest = (SourceId source, AnalyticsEvent event) IngestReceipt
+      ! (unauthenticated, forbidden, schema_unknown, payload_too_large,
+         quota_exceeded),
+
+  qry read_events = (SourceId source, opt Cursor cursor) Page (AnalyticsEvent)
+      ! (unauthenticated, forbidden, not_found, invalid_cursor),
+
+  cmd suspend_source = (SourceId source) Source
+      ! (unauthenticated, forbidden, not_found) )
+
+state ingest_state = (
+  of aggregate (Source, AnalyticsEvent, IngestReceipt),
+  owner ingest_app,
+  durability durable,
+  initial empty,
+  aggregate per_source SourceId,
+  versioned optimistic,
+  consistency serial_per_source )
+
+flow producer_to_ingest = producer -> ingest_service : cmd
+  (grant signed_api_key, deny raw_secret)
+
+behavior ingest_event = on ingest_service.ingest (producer, request) (
+  reads (sources, quotas), writes events,
+  atomic source request.source, idempotency event_id;
+
+  requires authenticated (producer);
+  requires source_active (pre, request.source);
+  requires accepted_today (pre, request.source) < 10000;
+  ensures  post = journal_event (pre, request, result);
+  returns  result;
+  fails quota_exceeded
+    when accepted_today (pre, request.source) = 10000
+    preserves all_state;
+  emits event_journaled exactly_once_logically )
+
+behavior suspend_source = on ingest_service.suspend_source (producer, request) (
+  reads sources, writes sources,
+  atomic source request.source, idempotency command_key;
+
+  requires is_platform_admin (pre, producer);
+  ensures  post = mark_suspended (pre, request);
+  fails forbidden
+    when not is_platform_admin (pre, producer)
+    preserves all_state )
+
+inv no_orphan_events = on ingest_state
+  always every_event_has_registered_source
+
+inv quota_ceiling = on ingest_state
+  always for all Source s: accepted_today (s) <= 10000
+
+constraint ingest_capacity = workload on ingest_service
+  under (virtual_users 200, duration 15 min, read_p95 200 ms, write_p95 250 ms)
+  must lost_events = 0 and duplicate_journal_entries = 0
+
+synthesis prototype = target ruby / rails (
+  platform gymnast_reference_platform_v1,
+  model small_code_model (class nano, temperature 0, max_attempts 3),
+  attempts 3,
+  must_not (invent_product_semantics, add_unpinned_dependencies) )
+
+acceptance production = of ingest_app (
+  property ingest_then_read =
+    generate (actor active_producer, event valid_event)
+    execute (ingest (actor, event); read_events (actor, event.source))
+    must contains_equivalent (result, event),
+
+  property suspended_source_rejected =
+    generate (actor suspended_producer, event valid_event)
+    execute ingest (actor, event)
+    must fails_with forbidden,
+
+  scenario quota_boundary = (
+    given producer = active_producer;
+    when ingest_distinct (producer, 10000); then succeeds;
+    when ingest_distinct (producer, 10001); then fails_with quota_exceeded ),
+
+  concurrency journal_race = (actors 200, schedule adversarial)
+    must duplicate_journal_entries = 0,
+
+  fault durable_restart = after acknowledged_write inject restart
+    must read_your_acknowledged_write,
+
+  coverage (every_operation, every_error, every_transition,
+            every_invariant, boundaries),
+
+  execution (clock virtual, randomness seeded,
+             network controlled, timezone "UTC") )

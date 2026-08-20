@@ -425,7 +425,12 @@ contract:
   fingerprint-free form; promotion itself checks STRUCTURE, not
   provenance — the in-process compile/synthesize path evaluates the
   bundle it just assembled, and any consumer reading a bundle back
-  from disk MUST call `verify_bundle_fingerprint` first.
+  from disk MUST call `verify_bundle_fingerprint` first. The
+  fingerprint detects drift and corruption only: FNV-1a is unkeyed and
+  stored inside the document it covers, so a deliberate tamperer can
+  recompute it — authenticity against an adversary requires a keyed
+  MAC or signature, which nothing in this crate provides (and the
+  planned SHA-256 upgrade alone will not either).
 - **Only `Succeeded` results contribute artifacts** (finding 3;
   delta — the reference collects blindly): a Failed result's
   firewall-rejected candidate is provenance, not a produced artifact,
@@ -438,7 +443,9 @@ contract:
   edge_02, which pinned `promote` over 4 never-executed nodes and 5
   missing artifacts, was the vacuous composition the gate flagged; it
   now pins `hold`). `verification-passed` additionally requires
-  `total > 0`: a zero-obligation verification section is no evidence.
+  `passed + failed > 0`: a zero-obligation verification section is no
+  evidence, and neither is an all-SKIPPED one — `skipped` means the
+  verifier could not run the obligation (gate re-review residual 1).
   An explicit `(verification nil)` pair stays vacuously true; a bundle
   MISSING the pair entirely (a shape `assemble_bundle` never emits)
   fails closed.
@@ -449,3 +456,10 @@ contract:
 - **Artifact `size` is BYTES** — now pinned with multi-byte content
   (finding 6), and the four fail-closed promotion behaviors are pinned
   outside the implementer-authored module tests (finding 7).
+
+- **Execution-result diagnostics fold into the bundle** (gate
+  re-review, residual 2): bundle `diagnostics` = artifact ++
+  capability ++ traceability ++ every execution result's own
+  diagnostics, in result order — a merged synthesize bundle records
+  WHY a node failed (`synthesis-exhausted`, recipe errors), and
+  `no-error-diagnostics` means what its name says.

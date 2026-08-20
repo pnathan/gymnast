@@ -1130,9 +1130,16 @@ fn oracle_06e_indeterminate_check_has_teeth() {
     // indeterminate 1 (failed still 0): verification-passed stays t;
     // ONLY no-indeterminate-verification goes nil -- the DELTA check
     // must block promotion on its own.
+    // INTEGRATOR RESOLUTION (phase-8 gate re-review, residual 1): the
+    // mutated summary keeps one PASSED obligation so verification-passed
+    // stays t under the new executed-count rule (passed + failed > 0) —
+    // preserving this test's isolation intent: ONLY the indeterminate
+    // check blocks. (The original all-indeterminate summary now fails
+    // verification-passed too, which is the honest reading but tests a
+    // different thing.)
     let text = green_bundle().print().replace(
         "(summary ((total 1) (passed 1) (failed 0) (skipped 0) (indeterminate 0)))",
-        "(summary ((total 1) (passed 0) (failed 0) (skipped 0) (indeterminate 1)))",
+        "(summary ((total 2) (passed 1) (failed 0) (skipped 0) (indeterminate 1)))",
     );
     let bundle = parse(&text).expect("mutated green bundle parses");
     assert_ne!(bundle.print(), green_bundle().print(), "mutation applied");
