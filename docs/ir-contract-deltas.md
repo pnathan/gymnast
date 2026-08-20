@@ -463,3 +463,11 @@ contract:
   diagnostics, in result order — a merged synthesize bundle records
   WHY a node failed (`synthesis-exhausted`, recipe errors), and
   `no-error-diagnostics` means what its name says.
+- **`CLAUDE_SYSTEM_PROMPT` gained a NEWLINES clause** (no longer a
+  verbatim port of `$gymnast-claude-system-prompt`): the sexpr string
+  grammar interprets only `\"` and `\\`, so a model writing C-style
+  `\n` produces two literal characters and a one-line corrupted source
+  file — observed in 3 of 4 accepted candidates on the first live
+  bi-ingest synthesis. The prompt now states that real newline
+  characters are required and `\n` is not an escape. Model output is
+  still never rewritten; the contract is stated, not patched over.
