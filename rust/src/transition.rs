@@ -304,20 +304,22 @@ pub fn eval_predicate3(
     };
     match items[0].as_sym() {
         Some("=") => {
-            // Groundedness qualification (phase-7 gate, finding 2): a
-            // bare symbol that resolves through no binding evaluates to
-            // itself, which is fine as an enum LITERAL but is a failed
-            // LOOKUP when compared against a non-symbol value --
-            // `(= lost_updates 0)` over a state with no `lost_updates`
-            // entry must be `Unknown`, not a fabricated grounded
-            // `Fails`. Sym-vs-sym comparison stays grounded (enum
-            // literal semantics); a resolved value on either side
-            // compared against anything non-floating stays grounded.
+            // Groundedness qualification (phase-7 gate, finding 2 +
+            // re-review residual): a bare symbol that resolves through
+            // no binding evaluates to itself -- a failed LOOKUP, not
+            // evidence. The verdict is grounded only when BOTH sides
+            // resolved (literals, special heads, successful state
+            // lookups, lists). The legitimate enum-literal case is
+            // resolved-vs-literal (`(= status active)` with `status`
+            // bound); two floating symbols have no grounded reading --
+            // `(= current_status open)` over a state with neither entry
+            // must be `Unknown`, never a fabricated `Holds`/`Fails`.
             let (a, a_resolved) = eval_expr_resolved(&nth_arg(items, 1), state, actor, input);
             let (b, b_resolved) = eval_expr_resolved(&nth_arg(items, 2), state, actor, input);
             let a_floating = !a_resolved;
             let b_floating = !b_resolved;
-            if (a_floating && !matches!(b, Sexpr::Sym(_)))
+            if (a_floating && b_floating)
+                || (a_floating && !matches!(b, Sexpr::Sym(_)))
                 || (b_floating && !matches!(a, Sexpr::Sym(_)))
             {
                 return Verdict::Unknown;
@@ -473,11 +475,25 @@ fn eval_predicate_inner(
         Some("or") => items[1..]
             .iter()
             .any(|p| eval_predicate_inner(p, state, actor, input, checked)),
-        Some("=") | Some("<") | Some("<=") => match eval_predicate3(pred, state, actor, input) {
+        Some("=") => match eval_predicate3(pred, state, actor, input) {
             Verdict::Holds => true,
             Verdict::Fails => false,
-            // Only reachable via `<`/`<=` over a non-Int operand (`=` is
-            // always grounded): matches the old total-false delta exactly.
+            // Reachable since the groundedness qualification (phase-7
+            // gate finding 2 + residual): a floating-symbol comparison.
+            // Phase-6 BOOLEAN parity is structural equality of the
+            // evaluated sides (a floating symbol evaluates to itself),
+            // while the `checked` flag honestly reads false.
+            Verdict::Unknown => {
+                *checked = false;
+                eval_expr(&nth_arg(items, 1), state, actor, input)
+                    == eval_expr(&nth_arg(items, 2), state, actor, input)
+            }
+        },
+        Some("<") | Some("<=") => match eval_predicate3(pred, state, actor, input) {
+            Verdict::Holds => true,
+            Verdict::Fails => false,
+            // A non-Int operand: matches the old total-false delta
+            // exactly.
             Verdict::Unknown => {
                 *checked = false;
                 false

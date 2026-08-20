@@ -300,14 +300,21 @@ pinned by `gate7_regression_test.rs`:
   `(basis checked)` while its invariant checks were undecided. The
   reference (boolean `check-invariants` inside traces) can silently
   launder an undecidable invariant into "held"; this port refuses to.
-- **`=` groundedness is qualified** (finding 2): in `eval_predicate3`,
-  a bare symbol that resolves through no binding (`eval_expr_resolved`
-  returns it unresolved) compared against a NON-symbol value yields
-  `Unknown` — `(= lost_updates 0)` over a state with no `lost_updates`
-  is a failed lookup, not a grounded `Fails`. Sym-vs-sym comparisons
-  stay grounded (enum-literal semantics), as do comparisons where the
-  unresolved side faces a symbol-valued resolved side. The boolean
-  evaluator is unchanged.
+- **`=` groundedness is qualified** (finding 2 + re-review residual):
+  in `eval_predicate3`, a bare symbol that resolves through no binding
+  (`eval_expr_resolved` returns it unresolved) makes the comparison
+  `Unknown` unless the OTHER side is a resolved symbol value —
+  `(= lost_updates 0)` (failed lookup vs Int) and
+  `(= current_status open)` (BOTH sides floating) are `Unknown`, never
+  a fabricated grounded verdict. The one grounded enum-literal case is
+  resolved-vs-floating-literal: `(= status active)` with `status`
+  bound to a symbol compares structurally. The boolean VALUE of
+  `eval_predicate` is unchanged for every shape, but
+  `eval_predicate_basis`'s `checked` flag now correctly reads `false`
+  where the tri-state verdict is `Unknown` — so a precondition of the
+  failed-lookup shape marks its step symbolic where phase 6 did not
+  (the honest direction, consistent with the oracle's "Unknown implies
+  checked == false" law).
 - **Trace violations carry `(step-index N)`** and counterexamples pair
   each violation with the step at that index (finding 7) — a deliberate
   deviation from the reference's `(car steps)` pairing, which

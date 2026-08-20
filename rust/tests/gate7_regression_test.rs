@@ -251,14 +251,30 @@ fn gate2_equality_sym_vs_sym_stays_grounded_enum_semantics() {
         Sexpr::sym("trashed"),
     ]);
     assert_eq!(eval_predicate3(&fails, &state, None, None), Verdict::Fails);
-    // Two floating syms compare as literals (both are enum-literal
-    // shaped; nothing grounded contradicts them).
-    let lit = Sexpr::list(vec![
+    // Two floating syms have NO grounded reading (gate re-review
+    // residual): neither side is bound to anything, so even
+    // structurally equal literals are `Unknown` — the legitimate enum
+    // case is resolved-vs-literal, pinned above. `(= current_status
+    // open)` over a state with neither entry was the re-review's
+    // fabricated `(status failed) (basis checked)` reproduction.
+    let both_floating_eq = Sexpr::list(vec![
         Sexpr::sym("="),
         Sexpr::sym("pending"),
         Sexpr::sym("pending"),
     ]);
-    assert_eq!(eval_predicate3(&lit, &state, None, None), Verdict::Holds);
+    assert_eq!(
+        eval_predicate3(&both_floating_eq, &state, None, None),
+        Verdict::Unknown
+    );
+    let both_floating_ne = Sexpr::list(vec![
+        Sexpr::sym("="),
+        Sexpr::sym("current_status"),
+        Sexpr::sym("open"),
+    ]);
+    assert_eq!(
+        eval_predicate3(&both_floating_ne, &state, None, None),
+        Verdict::Unknown
+    );
 }
 
 #[test]

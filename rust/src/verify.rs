@@ -1242,14 +1242,6 @@ fn compile_verification_without_fingerprint(ir: &Ir) -> Sexpr {
     ])
 }
 
-/// Compiles the full verification bundle: lowers every obligation, runs
-/// `verify_obligation` over each, tallies pass/fail/skip/indeterminate,
-/// and folds in the first acceptance node's environment diagnostics,
-/// transition ref-check warnings, duplicate-obligation-id diagnostics,
-/// and coverage analysis. Pure and deterministic. Builds on the
-/// fingerprint-free form so the two can never drift, exactly the
-/// `Ir`/`Plan` discipline (plan section D; the delta doc's "no
-/// fingerprint field" note is superseded by this contract).
 /// Every ERROR-severity diagnostic message anywhere in a verification
 /// bundle: the bundle-level `diagnostics` (where E601 lands),
 /// `transition-diagnostics`, `environment-diagnostics`,
@@ -1300,6 +1292,14 @@ pub fn bundle_error_diagnostics(bundle: &Sexpr) -> Vec<String> {
     out
 }
 
+/// Compiles the full verification bundle: lowers every obligation, runs
+/// `verify_obligation` over each, tallies pass/fail/skip/indeterminate,
+/// and folds in the first acceptance node's environment diagnostics,
+/// transition ref-check warnings, duplicate-obligation-id diagnostics,
+/// and coverage analysis. Pure and deterministic. Builds on the
+/// fingerprint-free form so the two can never drift, exactly the
+/// `Ir`/`Plan` discipline (plan section D; the delta doc's "no
+/// fingerprint field" note is superseded by this contract).
 pub fn compile_verification(ir: &Ir) -> Sexpr {
     let base = compile_verification_without_fingerprint(ir);
     let fp = fingerprint::fingerprint(&base);
