@@ -1,0 +1,140 @@
+# A Gantt chart tool in the compact surface: planners build dependency-
+# ordered activity schedules; adding an activity may not create a
+# dependency cycle; shifting an activity ripples through its dependents.
+# Target: Go / stdlib.
+
+spec gantt = v 0.1 owner planning
+  exports PlanId, ActivityId, Activity, gantt_service
+
+application gantt = (modules gantt, default_acceptance production)
+
+actor planner = person (identity saml_login (issuer, subject))
+
+mode PlanId     = opaque text
+mode ActivityId = opaque text
+mode UserId     = opaque text
+mode Version    = opaque int
+mode Days       = opaque int
+mode Cursor     = opaque text
+mode Page       = opaque text
+
+mode ActivityKind  = enum (task, milestone, summary)
+mode ActivityState = enum (planned, started, done, cancelled)
+
+mode Anchor = union (day local_date, at zoned_datetime)
+
+mode Activity = struct (
+  ActivityId id,
+  PlanId plan,
+  text (1..200) name,
+  ActivityKind kind,
+  ActivityState state,
+  Anchor start,
+  Days duration,
+  opt ActivityId depends_on,
+  Version version )
+
+mode ShiftReceipt = struct (
+  ActivityId activity,
+  Days delta,
+  Version version )
+
+component gantt_app = (
+  responsibility "Maintain acyclic, dependency-consistent project schedules",
+  provides gantt_service,
+  uses (saml_identity, durable_store, clock, id_source) )
+
+interface gantt_service = for planner (
+  cmd add_activity = (PlanId plan, Activity activity) Activity
+      ! (unauthenticated, forbidden, not_found, dependency_cycle, plan_full),
+
+  cmd shift_activity = (ActivityId activity, Days delta) ShiftReceipt
+      ! (unauthenticated, forbidden, not_found, anchored_milestone),
+
+  qry read_schedule = (PlanId plan, opt Cursor cursor) Page (Activity)
+      ! (unauthenticated, forbidden, not_found, invalid_cursor) )
+
+state gantt_state = (
+  of aggregate (Activity, ShiftReceipt),
+  owner gantt_app,
+  durability durable,
+  initial empty,
+  aggregate per_plan PlanId,
+  versioned optimistic,
+  consistency serial_per_plan )
+
+flow planner_to_gantt = planner -> gantt_service : cmd
+  (grant authenticated_session, deny raw_saml_assertion)
+
+behavior add_activity = on gantt_service.add_activity (planner, request) (
+  reads (plans, activities), writes activities,
+  atomic plan request.plan, idempotency command_key;
+
+  requires authenticated (planner);
+  requires may_edit_plan (pre, planner, request.plan);
+  requires activity_count (pre, request.plan) < 2000;
+  requires acyclic_after_insert (pre, request);
+  ensures  post = insert_activity (pre, request, result);
+  returns  result;
+  fails plan_full
+    when activity_count (pre, request.plan) = 2000
+    preserves all_state;
+  fails dependency_cycle
+    when not acyclic_after_insert (pre, request)
+    preserves all_state;
+  emits activity_added exactly_once_logically )
+
+behavior shift_activity = on gantt_service.shift_activity (planner, request) (
+  reads (activities), writes activities,
+  atomic activity request.activity, idempotency command_key;
+
+  requires may_edit_activity (pre, planner, request.activity);
+  ensures  post = shift_with_dependents (pre, request);
+  returns  result;
+  fails anchored_milestone
+    when is_anchored_milestone (pre, request.activity)
+    preserves all_state )
+
+inv schedule_acyclic = on gantt_state
+  always dependency_graph_has_no_cycles
+
+inv plan_ceiling = on gantt_state
+  always for all PlanId p: activity_count (p) <= 2000
+
+constraint planning_capacity = workload on gantt_service
+  under (virtual_users 100, duration 15 min, read_p95 200 ms, write_p95 300 ms)
+  must lost_updates = 0 and dangling_dependencies = 0
+
+synthesis prototype = target go / stdlib (
+  platform gymnast_reference_platform_v1,
+  model small_code_model (class nano, temperature 0, max_attempts 3),
+  attempts 3,
+  must_not (invent_product_semantics, add_unpinned_dependencies) )
+
+acceptance production = of gantt_app (
+  property add_then_read =
+    generate (actor plan_editor, activity valid_activity)
+    execute (add_activity (actor, activity); read_schedule (actor, activity.plan))
+    must contains_equivalent (result, activity),
+
+  property outsider_cannot_add =
+    generate (actor outside_user, activity valid_activity)
+    execute add_activity (actor, activity)
+    must fails_with forbidden,
+
+  scenario capacity_boundary = (
+    given editor = plan_editor;
+    when add_distinct (editor, 2000); then succeeds;
+    when add_distinct (editor, 2001); then fails_with plan_full ),
+
+  concurrency shift_race = (actors 100, schedule adversarial)
+    must dangling_dependencies = 0,
+
+  fault durable_restart = after acknowledged_write inject restart
+    must read_your_acknowledged_write,
+
+  coverage (every_operation, every_error, every_transition,
+            every_invariant, boundaries),
+
+  execution (clock virtual, randomness seeded,
+             network controlled, timezone "UTC") )

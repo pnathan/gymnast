@@ -1,0 +1,139 @@
+# A chatbot service in the compact surface. The APPLICATION is a
+# deterministic conversation state machine — sessions, alternating
+# turns, bounded transcripts, durable journaling; the language model
+# that produces replies is an external CAPABILITY at the component
+# boundary (bot_engine), never part of the application's own semantics.
+# Target: Rust / Actix.
+
+spec chatbot = v 0.1 owner conversations
+  exports SessionId, MessageId, ChatMessage, Session, chat_service
+
+application chatbot = (modules chatbot, default_acceptance production)
+
+actor end_user = person (identity api_session (issuer, subject))
+
+mode SessionId = opaque text
+mode MessageId = opaque text
+mode UserId    = opaque text
+mode Version   = opaque int
+mode Turns     = opaque int
+mode Cursor    = opaque text
+mode Page      = opaque text
+
+mode TurnRole     = enum (user_turn, bot_turn)
+mode SessionState = enum (active, ended, expired)
+
+mode SaidAt = union (at zoned_datetime, day local_date)
+
+mode ChatMessage = struct (
+  MessageId id,
+  SessionId session,
+  TurnRole role,
+  text (1..4000) content,
+  SaidAt said_at,
+  Version version )
+
+mode Session = struct (
+  SessionId id,
+  UserId owner,
+  SessionState state,
+  Turns turn_count,
+  Version version )
+
+component chatbot_app = (
+  responsibility "Own conversation state: sessions, alternating turns, bounded transcripts",
+  provides chat_service,
+  uses (session_identity, bot_engine, durable_store, clock, id_source) )
+
+interface chat_service = for end_user (
+  cmd open_session = (UserId owner) Session
+      ! (unauthenticated, session_quota_exceeded),
+
+  cmd post_message = (SessionId session, text content) ChatMessage
+      ! (unauthenticated, forbidden, not_found, session_ended,
+         message_too_long, transcript_full),
+
+  qry read_transcript = (SessionId session, opt Cursor cursor) Page (ChatMessage)
+      ! (unauthenticated, forbidden, not_found, invalid_cursor) )
+
+state chat_state = (
+  of aggregate (Session, ChatMessage),
+  owner chatbot_app,
+  durability durable,
+  initial empty,
+  aggregate per_session SessionId,
+  versioned optimistic,
+  consistency serial_per_session )
+
+flow user_to_chat = end_user -> chat_service : cmd
+  (grant authenticated_session, deny raw_session_secret)
+
+behavior post_message = on chat_service.post_message (end_user, request) (
+  reads (sessions, messages), writes messages,
+  atomic session request.session, idempotency message_key;
+
+  requires authenticated (end_user);
+  requires owns_session (pre, end_user, request.session);
+  requires session_active (pre, request.session);
+  requires turn_count (pre, request.session) < 500;
+  ensures  post = append_turn (pre, request, result);
+  returns  result;
+  fails transcript_full
+    when turn_count (pre, request.session) = 500
+    preserves all_state;
+  emits bot_reply_requested exactly_once_logically )
+
+behavior end_session = on chat_service.open_session (end_user, request) (
+  reads (sessions), writes sessions,
+  atomic session request.session, idempotency command_key;
+
+  requires authenticated (end_user);
+  ensures  post = open_or_end_session (pre, request);
+  returns  result;
+  fails session_quota_exceeded
+    when active_session_count (pre, end_user) = 100
+    preserves all_state )
+
+inv turns_alternate = on chat_state
+  always transcript_roles_strictly_alternate
+
+inv transcript_ceiling = on chat_state
+  always for all SessionId s: turn_count (s) <= 500
+
+constraint conversation_capacity = workload on chat_service
+  under (virtual_users 400, duration 10 min, read_p95 150 ms, write_p95 250 ms)
+  must lost_updates = 0 and out_of_order_turns = 0
+
+synthesis prototype = target rust / actix (
+  platform gymnast_reference_platform_v1,
+  model small_code_model (class nano, temperature 0, max_attempts 3),
+  attempts 3,
+  must_not (invent_product_semantics, add_unpinned_dependencies) )
+
+acceptance production = of chatbot_app (
+  property post_then_read =
+    generate (actor session_owner, message valid_message)
+    execute (post_message (actor, message); read_transcript (actor, message.session))
+    must contains_equivalent (result, message),
+
+  property stranger_cannot_post =
+    generate (actor other_user, message valid_message)
+    execute post_message (actor, message)
+    must fails_with forbidden,
+
+  scenario transcript_boundary = (
+    given owner = session_owner;
+    when post_distinct (owner, 500); then succeeds;
+    when post_distinct (owner, 501); then fails_with transcript_full ),
+
+  concurrency turn_race = (actors 400, schedule adversarial)
+    must out_of_order_turns = 0,
+
+  fault durable_restart = after acknowledged_write inject restart
+    must read_your_acknowledged_write,
+
+  coverage (every_operation, every_error, every_transition,
+            every_invariant, boundaries),
+
+  execution (clock virtual, randomness seeded,
+             network controlled, timezone "UTC") )
