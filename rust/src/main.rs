@@ -11,8 +11,9 @@ use gymnast_rs::prompt;
 use gymnast_rs::recipe;
 use gymnast_rs::runner;
 use gymnast_rs::sexpr::{self, Sexpr};
+use gymnast_rs::verify;
 
-const USAGE: &str = "usage: gymnast-rs <parse|check|ir|plan|prompts> FILE.gym\n       gymnast-rs compile FILE.gym OUT_DIR\n       gymnast-rs synthesize FILE.gym OUT_DIR [MAX_ATTEMPTS]";
+const USAGE: &str = "usage: gymnast-rs <parse|check|ir|plan|prompts|verify> FILE.gym\n       gymnast-rs compile FILE.gym OUT_DIR\n       gymnast-rs synthesize FILE.gym OUT_DIR [MAX_ATTEMPTS]";
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -85,6 +86,7 @@ fn main() {
         "ir" => cmd_ir(&src, file_path, file_name),
         "plan" => cmd_plan(&src, file_path, file_name),
         "prompts" => cmd_prompts(&src, file_path, file_name),
+        "verify" => cmd_verify(&src, file_path, file_name),
         _ => {
             eprintln!("{}", USAGE);
             std::process::exit(2);
@@ -178,6 +180,42 @@ fn cmd_ir(src: &str, file_path: &str, _file_name: &str) {
     // Exit 1 on any error-severity diagnostic, parse or IR: a spec that
     // only partially parsed must not read as valid even when the
     // surviving declarations elaborate cleanly.
+    std::process::exit(if parse_errors || ir.has_errors() {
+        1
+    } else {
+        0
+    });
+}
+
+/// Handle the `verify` subcommand: parse, elaborate, compile the
+/// verification bundle; stdout is the canonical serialization of
+/// `(verification-bundle ...)`. Same pipeline/diagnostic/exit contract
+/// as `ir` (plan-phase6 section C): exit reflects parse/IR errors only.
+/// A FAILED verification obligation is results data carried inside the
+/// bundle, not a process error — it never affects the exit code, since
+/// promotion decisions belong to assembly (phase 7), not this stage.
+fn cmd_verify(src: &str, file_path: &str, _file_name: &str) {
+    let (ast, parse_diags) = parser::parse(src);
+
+    if !parse_diags.is_empty() {
+        eprint!("{}", diag::render(&parse_diags, src, file_path));
+    }
+    let parse_errors = parse_diags.iter().any(|d| d.severity == Severity::Error);
+
+    let file = match ast {
+        Some(file) => file,
+        None => std::process::exit(1),
+    };
+
+    let (ir, all_diags) = elaborate::elaborate_with_parse_diags(&file, &parse_diags);
+    let later_diags = &all_diags[parse_diags.len()..];
+    if !later_diags.is_empty() {
+        eprint!("{}", diag::render(later_diags, src, file_path));
+    }
+
+    let bundle = verify::compile_verification(&ir);
+    print!("{}", sexpr::canonical_serialize(&bundle));
+
     std::process::exit(if parse_errors || ir.has_errors() {
         1
     } else {

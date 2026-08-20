@@ -90,3 +90,25 @@ These were bugs found in review and fixed to match what `verify.lisp` /
   prompt delivery; the reference's shell-string concatenation (an
   injection hazard) is not ported. A failed/short stdin write is a
   provider failure, never a silently truncated prompt.
+
+## Verification shapes (phase 6)
+
+- Verification forms (`verification-obligation`, `verification-result`,
+  `violation`, `divergence`, `normalized-counterexample`,
+  `trace-equivalence-result`, `coverage-analysis`,
+  `execution-environment`) use the FLAT alist shape
+  `(tag (k v) (k v) ...)` — faithful to `src/verify.lisp`'s literal
+  `(list 'tag ...)` builds — while the `verification-bundle` root uses
+  the nested house convention `(tag ((k v) ...))` like every other
+  fingerprinted artifact. Consumers must not assume one uniform depth
+  across verification forms.
+- Coverage-obligation flags keep the surface's underscore spelling
+  (`every_operation`, ...), not the reference's hyphens.
+- The evaluator's `<`/`<=` on non-integers is total-false; the
+  reference errors. Unknown predicates and quantifiers hold
+  symbolically (`true`), exactly as the reference.
+- Execute steps naming bare helper ops against slash-qualified
+  transition operations produce `no-matching-transition` results —
+  reference behavior, pinned in `todo-verify.sexpr` (summary: 9
+  obligations, 2 passed, 3 failed, 4 skipped); a smarter match rule is
+  a tracked phase-7 decision, not a silent fix.

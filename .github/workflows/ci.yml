@@ -72,6 +72,17 @@ jobs:
           if cargo run -- plan /tmp/bad-plan.gym; then
             echo "plan accepted a spec with a duplicate semantic id" >&2; exit 1
           fi
+      - name: Reproducible verify
+        run: |
+          cargo run -- verify ../examples/todo.gym > /tmp/verify-one.sexpr
+          cargo run -- verify ../examples/todo.gym > /tmp/verify-two.sexpr
+          diff /tmp/verify-one.sexpr /tmp/verify-two.sexpr
+          diff /tmp/verify-one.sexpr tests/fixtures/todo-verify.sexpr
+      - name: Verify exits 1 on a known-bad spec
+        run: |
+          if cargo run -- verify /tmp/bad-plan.gym; then
+            echo "verify accepted a spec with a duplicate semantic id" >&2; exit 1
+          fi
       - name: Reproducible compilation
         run: |
           cargo run -- compile ../examples/todo.gym /tmp/rust-build-one
