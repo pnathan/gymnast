@@ -399,3 +399,53 @@ the reference, pinned by `assembly_oracle_test.rs`:
   `tests/fixtures/todo-bundle.sexpr` and CI's reproducible-compilation
   diff. A `hold` decision never changes the exit code: promotion is
   evidence, not a gate on compilation.
+
+## Phase-8 gate fixes (promotion honesty)
+
+All deliberate, each motivated by a phase-8 gate finding and pinned by
+`gate8_regression_test.rs`; the frozen oracle's promotion prints were
+amended under integrator arbitration (in-file INTEGRATOR RESOLUTION
+notes) because the gate mandate supersedes the plan's five-check
+contract:
+
+- **The synthesize bundle sees model outcomes** (finding 1, the
+  blocker): `evidence-bundle.sexpr` is written AFTER the generative
+  half, over `runner::merge_run_results(results, run_results)` — a
+  `Succeeded` run becomes a `Succeeded` execution result carrying the
+  firewall-ACCEPTED candidate; an `Exhausted` run becomes `Failed`
+  with `candidate: None` (a rejected candidate never enters the
+  ledger) and a `synthesis-exhausted` error diagnostic. The
+  upstream-errors early exit still writes the deterministic-only
+  bundle (models never ran; deferred is the honest state there).
+- **Shadow-proof promotion reads** (finding 2): every field
+  `evaluate_promotion` consults goes through `assoc_unique` — a
+  duplicated key fails the affected checks closed (the same
+  parser-differential rule as the strict runner readback). A new
+  `verify_bundle_fingerprint` recomputes the fingerprint over the
+  fingerprint-free form; promotion itself checks STRUCTURE, not
+  provenance — the in-process compile/synthesize path evaluates the
+  bundle it just assembled, and any consumer reading a bundle back
+  from disk MUST call `verify_bundle_fingerprint` first.
+- **Only `Succeeded` results contribute artifacts** (finding 3;
+  delta — the reference collects blindly): a Failed result's
+  firewall-rejected candidate is provenance, not a produced artifact,
+  and must not suppress the missing-artifact warning for a path that
+  was never written.
+- **Six computed checks** (finding 4): `all-artifacts-present` (no
+  `missing-artifact` diagnostic) is now computed — the advertised
+  `requires` line has a check behind it, and a build with
+  declared-but-unproduced artifacts cannot promote (the oracle's
+  edge_02, which pinned `promote` over 4 never-executed nodes and 5
+  missing artifacts, was the vacuous composition the gate flagged; it
+  now pins `hold`). `verification-passed` additionally requires
+  `total > 0`: a zero-obligation verification section is no evidence.
+  An explicit `(verification nil)` pair stays vacuously true; a bundle
+  MISSING the pair entirely (a shape `assemble_bundle` never emits)
+  fails closed.
+- **`no-error-diagnostics` folds the nested verification section's
+  error census in** (finding 5) via `verify::bundle_error_diagnostics`
+  — an E601 or source-diagnostic error inside the verification bundle
+  can no longer read as "no error diagnostics" one level up.
+- **Artifact `size` is BYTES** — now pinned with multi-byte content
+  (finding 6), and the four fail-closed promotion behaviors are pinned
+  outside the implementer-authored module tests (finding 7).

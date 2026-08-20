@@ -639,7 +639,6 @@ fn cmd_synthesize(src: &str, file_path: &str, out_dir: &str, max_attempts: u32) 
         "results.sexpr",
         &sexpr::canonical_serialize(&results_wrapper),
     );
-    write_evidence_bundle(out_path, &ir, &p, &results);
 
     let mut execution_errors = false;
     for result in &results {
@@ -673,8 +672,11 @@ fn cmd_synthesize(src: &str, file_path: &str, out_dir: &str, max_attempts: u32) 
     // Never invoke the live model over a broken pipeline: parse,
     // elaboration, or planning errors end the run here (phase-5 gate,
     // finding 9) — spending model tokens on a spec that already failed
-    // deterministic stages helps no one.
+    // deterministic stages helps no one. The evidence bundle for this
+    // path is honestly deterministic-only: the generative nodes never
+    // ran and stay deferred in it.
     if parse_errors || ir.has_errors() || plan_has_errors {
+        write_evidence_bundle(out_path, &ir, &p, &results);
         eprintln!("error: upstream errors present; skipping model synthesis");
         std::process::exit(1);
     }
@@ -710,6 +712,15 @@ fn cmd_synthesize(src: &str, file_path: &str, out_dir: &str, max_attempts: u32) 
         }
     }
 
+    // The evidence bundle is assembled AFTER the generative half, over
+    // the merged results, so the promotion decision sees every model
+    // outcome (phase-8 gate, finding 1): an accepted run candidate
+    // enters the artifact ledger with its digest; an exhausted node
+    // becomes a Failed result with an error diagnostic, so the bundle
+    // can never say `promote` while the process exits 1 on exhaustion.
+    let merged = runner::merge_run_results(&results, &run_results);
+    write_evidence_bundle(out_path, &ir, &p, &merged);
+
     std::process::exit(
         if parse_errors || ir.has_errors() || plan_has_errors || execution_errors || run_exhausted {
             1
@@ -719,8 +730,12 @@ fn cmd_synthesize(src: &str, file_path: &str, out_dir: &str, max_attempts: u32) 
     );
 }
 
-/// Assembles the promotion evidence bundle over the deterministic
-/// execution results and the (deterministic) verification bundle, and
+/// Assembles the promotion evidence bundle over the given execution
+/// results — `compile` passes the deterministic results; `synthesize`
+/// passes the results MERGED with the generative run outcomes
+/// (`runner::merge_run_results`), assembled after the model half so
+/// the bundle is never blind to model outcomes (phase-8 gate, finding
+/// 1) — plus the (deterministic) verification bundle, and
 /// writes it as `evidence-bundle.sexpr` (phase-8 plan, section C):
 /// one canonically printed two-element form,
 /// `(assembly ((bundle <evidence-bundle>) (promotion <promotion-result>)))`,

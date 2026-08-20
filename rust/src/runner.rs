@@ -600,6 +600,62 @@ pub fn run_generative_nodes(
         .collect()
 }
 
+/// Folds generative run results into the deterministic execution
+/// results, so the evidence bundle assembled AFTER the model half can
+/// see every model outcome (phase-8 gate, finding 1: a bundle
+/// assembled before `run_generative_nodes` is structurally blind to
+/// model outcomes, and its promotion decision asserts sufficiency over
+/// work it cannot see).
+///
+/// For each deterministic result whose node has a run result: a
+/// `Succeeded` run becomes a `Succeeded` execution result carrying the
+/// FIREWALL-ACCEPTED candidate (`run_node` only sets `candidate` on
+/// acceptance); an `Exhausted` run becomes `Failed` with `candidate:
+/// None` — a rejected candidate must never enter the artifact ledger —
+/// and one error diagnostic (`synthesis-exhausted`) so the bundle's
+/// `no-error-diagnostics` check sees the failure. Results without a
+/// matching run result (structural nodes) pass through unchanged, in
+/// the original order. A run result whose node id matches no
+/// deterministic result is ignored (never invented into the list).
+pub fn merge_run_results(
+    results: &[crate::recipe::ExecutionResult],
+    run_results: &[RunResult],
+) -> Vec<crate::recipe::ExecutionResult> {
+    results
+        .iter()
+        .map(|r| {
+            let run = match run_results.iter().find(|rr| rr.node_id == r.node_id) {
+                Some(run) => run,
+                None => return r.clone(),
+            };
+            match run.status {
+                RunStatus::Succeeded => crate::recipe::ExecutionResult {
+                    node_id: r.node_id.clone(),
+                    status: crate::recipe::ExecutionStatus::Succeeded,
+                    candidate: run.candidate.clone(),
+                    recipe_identity: None,
+                    diagnostics: vec![],
+                },
+                RunStatus::Exhausted => crate::recipe::ExecutionResult {
+                    node_id: r.node_id.clone(),
+                    status: crate::recipe::ExecutionStatus::Failed,
+                    candidate: None,
+                    recipe_identity: None,
+                    diagnostics: vec![diag_sexpr(
+                        "error",
+                        "synthesis-exhausted",
+                        (0, 0),
+                        format!(
+                            "generative node {} exhausted its synthesis attempts",
+                            r.node_id
+                        ),
+                    )],
+                },
+            }
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------
 // Section B: the Claude subprocess provider.
 // ---------------------------------------------------------------------

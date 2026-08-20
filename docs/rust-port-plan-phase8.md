@@ -278,3 +278,19 @@ fmt-clean), `todo-bundle.sexpr` committed once and byte-stable across
 double compiles, all prior goldens untouched, delta doc updated
 (bundle fingerprint, no-indeterminate-verification check, dead
 `passed` status arm, deferred-does-not-block note).
+
+---
+
+**INTEGRATOR AMENDMENT (post-gate).** The Opus phase-8 gate blocked on
+the synthesize-bundle ordering and mandated promotion-honesty changes
+that supersede this plan's five-check table: `evaluate_promotion` now
+computes SIX checks (adding `all-artifacts-present`),
+`verification-passed` requires `total > 0`, reads are duplicate-key
+strict, `no-error-diagnostics` folds the nested verification error
+census in, `collect_artifacts` skips non-`Succeeded` results, and the
+synthesize evidence bundle is assembled after the generative half over
+merged results. The oracle's promotion prints (06b–06f, edge_01,
+edge_02) were amended accordingly — edge_02's original `promote` pin
+was the vacuous composition the gate flagged. See the "Phase-8 gate
+fixes" section of `docs/ir-contract-deltas.md` and
+`rust/tests/gate8_regression_test.rs`.

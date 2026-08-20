@@ -1063,23 +1063,33 @@ fn oracle_06b_promotion_todo_hold() {
     let bundle = assemble_bundle(&ir, &p, &results, Some(&verification));
     let result = evaluate_promotion(&default_promotion_policy(), &bundle);
 
-    // Header derivation: (t t nil nil t) -> hold. verification-passed
-    // nil alone suffices, but every check's value is pinned.
+    // Header derivation: hold. verification-passed nil alone suffices,
+    // but every check's value is pinned.
+    // INTEGRATOR RESOLUTION (phase-8 gate, finding 4): checks list
+    // gained `all-artifacts-present` (nil: todo has 5 missing-artifact
+    // warnings). Decision stays hold.
     assert_eq!(
         result.print(),
         "(promotion-result ((policy default) (decision hold) (checks \
-         ((no-error-diagnostics t) (all-nodes-succeeded t) (verification-passed nil) \
+         ((no-error-diagnostics t) (all-artifacts-present nil) (all-nodes-succeeded t) \
+         (verification-passed nil) \
          (no-indeterminate-verification nil) (traceability-complete t)))))"
     );
 }
 
 #[test]
 fn oracle_06c_promotion_all_green_promotes() {
+    // INTEGRATOR RESOLUTION (phase-8 gate, finding 4): checks list
+    // gained `all-artifacts-present` (t: the green bundle's
+    // diagnostics are empty). Still promote — the green bundle's
+    // verification summary has total 1 > 0, so the new
+    // zero-obligation guard on verification-passed does not fire.
     let result = evaluate_promotion(&default_promotion_policy(), &green_bundle());
     assert_eq!(
         result.print(),
         "(promotion-result ((policy default) (decision promote) (checks \
-         ((no-error-diagnostics t) (all-nodes-succeeded t) (verification-passed t) \
+         ((no-error-diagnostics t) (all-artifacts-present t) (all-nodes-succeeded t) \
+         (verification-passed t) \
          (no-indeterminate-verification t) (traceability-complete t)))))"
     );
 }
@@ -1101,11 +1111,15 @@ fn oracle_06d_fail_closed_on_missing_summary() {
     assert_eq!(body.len(), 9, "one field removed from the 10");
     let no_summary = Sexpr::list(vec![Sexpr::sym("evidence-bundle"), Sexpr::list(body)]);
 
+    // INTEGRATOR RESOLUTION (phase-8 gate, finding 4): checks list
+    // gained `all-artifacts-present` (t: empty diagnostics). Decision
+    // stays hold via all-nodes-succeeded nil.
     let result = evaluate_promotion(&default_promotion_policy(), &no_summary);
     assert_eq!(
         result.print(),
         "(promotion-result ((policy default) (decision hold) (checks \
-         ((no-error-diagnostics t) (all-nodes-succeeded nil) (verification-passed t) \
+         ((no-error-diagnostics t) (all-artifacts-present t) (all-nodes-succeeded nil) \
+         (verification-passed t) \
          (no-indeterminate-verification t) (traceability-complete t)))))"
     );
 }
@@ -1123,11 +1137,15 @@ fn oracle_06e_indeterminate_check_has_teeth() {
     let bundle = parse(&text).expect("mutated green bundle parses");
     assert_ne!(bundle.print(), green_bundle().print(), "mutation applied");
 
+    // INTEGRATOR RESOLUTION (phase-8 gate, finding 4): checks list
+    // gained `all-artifacts-present` (t). Decision stays hold via
+    // no-indeterminate-verification nil alone, as this test pins.
     let result = evaluate_promotion(&default_promotion_policy(), &bundle);
     assert_eq!(
         result.print(),
         "(promotion-result ((policy default) (decision hold) (checks \
-         ((no-error-diagnostics t) (all-nodes-succeeded t) (verification-passed t) \
+         ((no-error-diagnostics t) (all-artifacts-present t) (all-nodes-succeeded t) \
+         (verification-passed t) \
          (no-indeterminate-verification nil) (traceability-complete t)))))"
     );
 }
@@ -1135,13 +1153,15 @@ fn oracle_06e_indeterminate_check_has_teeth() {
 #[test]
 fn oracle_06f_policy_with_missing_requires() {
     // Edge table: requires is metadata; a policy without it still gets
-    // the five computed checks, and the result carries ITS name.
+    // the computed checks, and the result carries ITS name.
+    // INTEGRATOR RESOLUTION (phase-8 gate, finding 4): six checks now.
     let policy = parse("(promotion-policy ((name custom)))").expect("custom policy parses");
     let result = evaluate_promotion(&policy, &green_bundle());
     assert_eq!(
         result.print(),
         "(promotion-result ((policy custom) (decision promote) (checks \
-         ((no-error-diagnostics t) (all-nodes-succeeded t) (verification-passed t) \
+         ((no-error-diagnostics t) (all-artifacts-present t) (all-nodes-succeeded t) \
+         (verification-passed t) \
          (no-indeterminate-verification t) (traceability-complete t)))))"
     );
 }
@@ -1402,14 +1422,17 @@ fn edge_01_empty_results() {
     }
 
     // Promotion: no results -> no evidence anywhere ->
-    // traceability-complete nil; everything else t (no verification
-    // section makes both verification checks vacuously t; failed-nodes
-    // is 0).
+    // traceability-complete nil; nil verification section keeps both
+    // verification checks vacuously t; failed-nodes is 0.
+    // INTEGRATOR RESOLUTION (phase-8 gate, findings 2+4): the checks
+    // list gained `all-artifacts-present` (nil here -- all 10 declared
+    // paths missing). Decision stays hold.
     let result = evaluate_promotion(&default_promotion_policy(), &bundle);
     assert_eq!(
         result.print(),
         "(promotion-result ((policy default) (decision hold) (checks \
-         ((no-error-diagnostics t) (all-nodes-succeeded t) (verification-passed t) \
+         ((no-error-diagnostics t) (all-artifacts-present nil) (all-nodes-succeeded t) \
+         (verification-passed t) \
          (no-indeterminate-verification t) (traceability-complete nil)))))"
     );
 }
@@ -1433,11 +1456,21 @@ fn edge_02_verification_none() {
          (has-verification nil))"
     );
 
+    // INTEGRATOR RESOLUTION (phase-8 gate, finding 4): this test
+    // originally pinned `promote` here — a bundle with 4 never-executed
+    // nodes and 5 declared-but-unproduced artifacts. That composition
+    // was the gate's vacuous-promote MAJOR: each ingredient was
+    // individually sanctioned, but the composed consequence (promote
+    // over evidence that mostly does not exist) is exactly what the
+    // bundle exists to prevent. With the new computed
+    // `all-artifacts-present` check (nil: 5 missing-artifact warnings),
+    // the decision is now honestly `hold`.
     let result = evaluate_promotion(&default_promotion_policy(), &bundle);
     assert_eq!(
         result.print(),
-        "(promotion-result ((policy default) (decision promote) (checks \
-         ((no-error-diagnostics t) (all-nodes-succeeded t) (verification-passed t) \
+        "(promotion-result ((policy default) (decision hold) (checks \
+         ((no-error-diagnostics t) (all-artifacts-present nil) (all-nodes-succeeded t) \
+         (verification-passed t) \
          (no-indeterminate-verification t) (traceability-complete t)))))"
     );
 }

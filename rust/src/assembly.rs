@@ -147,7 +147,9 @@ fn diagnostic(severity: &str, code: &str, subject: &str, message: &str) -> Sexpr
 }
 
 /// Collects every candidate file output as an `Artifact`, in result
-/// order (mirrors `gymnast-collect-artifacts`). A result whose
+/// order (mirrors `gymnast-collect-artifacts`, with one deliberate
+/// delta: only SUCCEEDED results contribute — phase-8 gate, finding 3;
+/// see the delta doc). A result whose status is not `Succeeded`, whose
 /// `candidate` is `None`, whose candidate is not a well-formed
 /// two-element `(candidate (...))` tagged form, or whose `files` field
 /// is missing or empty contributes nothing — never an error here: the
@@ -160,6 +162,15 @@ fn diagnostic(severity: &str, code: &str, subject: &str, message: &str) -> Sexpr
 pub fn collect_artifacts(results: &[ExecutionResult]) -> Vec<Artifact> {
     let mut artifacts = Vec::new();
     for result in results {
+        // Only SUCCEEDED results contribute artifacts (phase-8 gate,
+        // finding 3; documented delta — the reference collects
+        // blindly): a Failed result still carries its firewall-REJECTED
+        // candidate for provenance, and recording rejected untrusted
+        // output as a produced artifact would suppress the
+        // missing-artifact warning for a path that was never written.
+        if result.status != ExecutionStatus::Succeeded {
+            continue;
+        }
         let body = match candidate_body(result.candidate.as_ref()) {
             Some(body) => body,
             None => continue,
@@ -370,44 +381,84 @@ pub fn default_promotion_policy() -> Sexpr {
 }
 
 /// Evaluates a promotion policy over an assembled evidence bundle,
-/// computing exactly FIVE checks (the policy's `requires` list is
+/// computing exactly SIX checks (the policy's `requires` list is
 /// metadata — the computed checks are the contract):
 ///
 /// | check | rule |
 /// |---|---|
-/// | `no-error-diagnostics` | bundle `diagnostics` contains no `(severity error)` |
+/// | `no-error-diagnostics` | bundle `diagnostics` contains no `(severity error)`, AND the nested verification section (when present) carries no error-severity diagnostic anywhere (`verify::bundle_error_diagnostics` — E601, source E3xx, ...; phase-8 gate, finding 5) |
+/// | `all-artifacts-present` | bundle `diagnostics` contains no `missing-artifact` warning (phase-8 gate, finding 4: the advertised `requires` line now has a computed check; a build with declared-but-unproduced artifacts must not promote) |
 /// | `all-nodes-succeeded` | summary `failed-nodes == 0` (deferred does NOT block) |
-/// | `verification-passed` | no verification section, OR its summary `failed == 0` |
-/// | `no-indeterminate-verification` | no verification section, OR summary `indeterminate == 0` (deliberate delta: phase 7 made undecidable verdicts honest; promotion must not launder them) |
+/// | `verification-passed` | no verification section, OR its summary has `total > 0` AND `failed == 0` (phase-8 gate, finding 4: a zero-obligation verification is no evidence at all) |
+/// | `no-indeterminate-verification` | no verification section, OR summary `indeterminate == 0` (phase 7 made undecidable verdicts honest; promotion must not launder them) |
 /// | `traceability-complete` | every traceability entry has both `has-implementation` and `has-evidence` |
 ///
-/// `decision` is `promote` iff all five are `t`. Missing/malformed
+/// `decision` is `promote` iff all six are `t`. Missing/malformed
 /// bundle fields evaluate their check to `nil` (fail-closed), never a
-/// panic. The one vacuous direction is deliberate and stated in the
-/// rules above: an ABSENT (or `nil`) verification section passes both
-/// verification checks; a PRESENT section whose summary cannot be read
-/// fails both.
+/// panic. The one vacuous direction is deliberate: an explicit
+/// `(verification nil)` pair — the assembled shape when no
+/// verification bundle was supplied — passes both verification checks;
+/// a bundle MISSING the pair entirely (not a shape `assemble_bundle`
+/// ever emits) fails them closed, and a present section whose summary
+/// cannot be read fails both.
+///
+/// SHADOW-PROOF READS (phase-8 gate, finding 2): every field this
+/// function consults is read with `assoc_unique` — a key that appears
+/// MORE than once in the bundle body (or inside the summary) makes the
+/// affected reads fail and their checks evaluate `nil`. A first-wins
+/// `assoc` would let one prepended `(verification nil)` pair shadow
+/// the real section and flip `hold` to `promote`.
+///
+/// AUTHENTICITY is the caller's obligation, not this function's: the
+/// promotion path inside `compile`/`synthesize` evaluates the bundle
+/// it just assembled in-process. Any consumer reading a bundle back
+/// from disk MUST call `verify_bundle_fingerprint` first — the
+/// fingerprint is the tamper-evidence; this function checks structure,
+/// not provenance (documented in `docs/ir-contract-deltas.md`).
 pub fn evaluate_promotion(policy: &Sexpr, bundle: &Sexpr) -> Sexpr {
     let body = bundle_body(bundle);
 
-    let no_error_diagnostics = match body.and_then(|b| b.assoc("diagnostics")) {
+    let own_diags_clean = match body.and_then(|b| assoc_unique(b, "diagnostics")) {
         Some(diags) => match diags.as_list() {
             Some(items) => !items.iter().any(is_error_diagnostic),
             None => false,
         },
         None => false,
     };
+    // Fold the nested verification section's own error census in
+    // (E601, source diagnostics, ...): an error the verification
+    // bundle already carries must not read as "no error diagnostics"
+    // one level up.
+    let nested_verification_clean = match body.and_then(|b| assoc_unique(b, "verification")) {
+        None => false, // body present but field missing/duplicated: fail closed
+        Some(section) => {
+            if section.as_list().is_some_and(|items| items.is_empty()) {
+                true
+            } else {
+                crate::verify::bundle_error_diagnostics(section).is_empty()
+            }
+        }
+    };
+    let no_error_diagnostics = own_diags_clean && nested_verification_clean;
+
+    let all_artifacts_present = match body.and_then(|b| assoc_unique(b, "diagnostics")) {
+        Some(diags) => match diags.as_list() {
+            Some(items) => !items.iter().any(is_missing_artifact_diagnostic),
+            None => false,
+        },
+        None => false,
+    };
 
     let all_succeeded = body
-        .and_then(|b| b.assoc("summary"))
-        .and_then(|s| s.assoc("failed-nodes"))
+        .and_then(|b| assoc_unique(b, "summary"))
+        .and_then(|s| assoc_unique(s, "failed-nodes"))
         .and_then(|n| n.as_int())
         == Some(0);
 
     let (verification_passed, no_indeterminate) = verification_checks(body);
 
     let traceability_complete = match body
-        .and_then(|b| b.assoc("traceability"))
+        .and_then(|b| assoc_unique(b, "traceability"))
         .and_then(|t| t.as_list())
     {
         Some(entries) => entries.iter().all(entry_traced),
@@ -416,6 +467,7 @@ pub fn evaluate_promotion(policy: &Sexpr, bundle: &Sexpr) -> Sexpr {
 
     let checks = [
         ("no-error-diagnostics", no_error_diagnostics),
+        ("all-artifacts-present", all_artifacts_present),
         ("all-nodes-succeeded", all_succeeded),
         ("verification-passed", verification_passed),
         ("no-indeterminate-verification", no_indeterminate),
@@ -482,21 +534,111 @@ fn is_error_diagnostic(d: &Sexpr) -> bool {
     }
 }
 
+/// Alist lookup that REJECTS shadowing: the value of the pair whose
+/// head symbol equals `key`, but only when exactly ONE such pair
+/// exists. A duplicated key returns `None`, so every promotion check
+/// reading through this fails closed instead of silently taking the
+/// first (or any) occurrence (phase-8 gate, finding 2 — the same
+/// parser-differential rule the strict runner readback enforces).
+fn assoc_unique<'a>(form: &'a Sexpr, key: &str) -> Option<&'a Sexpr> {
+    let items = form.as_list()?;
+    let mut found: Option<&Sexpr> = None;
+    for item in items {
+        if let Sexpr::List(pair) = item {
+            if pair.len() == 2 && pair[0].as_sym() == Some(key) {
+                if found.is_some() {
+                    return None; // duplicate: shadow attempt, fail closed
+                }
+                found = Some(&pair[1]);
+            }
+        }
+    }
+    found
+}
+
+/// `true` for a diagnostic whose `code` reads as `missing-artifact`
+/// (either diagnostic shape, same lookup convention as
+/// `is_error_diagnostic`). An unreadable code is NOT counted here —
+/// `is_error_diagnostic` already fails the bundle closed on any
+/// unreadable diagnostic, so this check stays specific.
+fn is_missing_artifact_diagnostic(d: &Sexpr) -> bool {
+    let code = d
+        .assoc("code")
+        .or_else(|| {
+            d.as_list()
+                .and_then(|items| items.get(1))
+                .and_then(|body| body.assoc("code"))
+        })
+        .and_then(|s| s.as_sym());
+    code == Some("missing-artifact")
+}
+
+/// Recomputes the bundle's fingerprint over its fingerprint-free form
+/// and compares: `true` only for a well-formed bundle whose trailing
+/// `fingerprint` field matches its own content. The tamper-evidence
+/// check for any consumer reading a bundle back from an untrusted
+/// medium (phase-8 gate, finding 2); the in-process
+/// assemble-then-evaluate path does not need it.
+pub fn verify_bundle_fingerprint(bundle: &Sexpr) -> bool {
+    let items = match bundle.as_list() {
+        Some(items) if items.len() == 2 && items[0].as_sym() == Some("evidence-bundle") => items,
+        _ => return false,
+    };
+    let body = match items[1].as_list() {
+        Some(body) => body,
+        None => return false,
+    };
+    let claimed = match body.last().and_then(|pair| pair.as_list()) {
+        Some(pair)
+            if pair.len() == 2
+                && pair[0].as_sym() == Some("fingerprint")
+                && body
+                    .iter()
+                    .filter(|p| {
+                        p.as_list().and_then(|x| x.first()).and_then(|s| s.as_sym())
+                            == Some("fingerprint")
+                    })
+                    .count()
+                    == 1 =>
+        {
+            match pair[1].as_str() {
+                Some(s) => s.to_string(),
+                None => return false,
+            }
+        }
+        _ => return false,
+    };
+    let without = Sexpr::list(vec![
+        Sexpr::sym("evidence-bundle"),
+        Sexpr::List(body[..body.len() - 1].to_vec()),
+    ]);
+    fingerprint::fingerprint(&without) == claimed
+}
+
 /// The two verification checks, computed together over the bundle's
 /// `verification` field: an absent field or a `nil` value is "no
 /// verification section" (both vacuously true); a present section
 /// whose summary cannot be read fails both (fail-closed); otherwise
-/// `failed == 0` / `indeterminate == 0` respectively.
+/// `total > 0 && failed == 0` / `indeterminate == 0` respectively.
+/// The `total > 0` condition is the phase-8 gate's finding 4: a
+/// zero-obligation verification section is not evidence that anything
+/// passed — without it, a spec with no obligations at all would
+/// launder into `promote` exactly the way a fully-indeterminate one
+/// would have before the `no-indeterminate-verification` check.
 fn verification_checks(body: Option<&Sexpr>) -> (bool, bool) {
-    let section = match body.and_then(|b| b.assoc("verification")) {
-        Some(v) => v,
-        None => return (true, true),
+    let section = match body.map(|b| assoc_unique(b, "verification")) {
+        Some(Some(v)) => v,
+        Some(None) => return (false, false), // missing or duplicated: fail closed
+        None => return (false, false),       // no readable bundle body at all
     };
     if section.as_list().is_some_and(|items| items.is_empty()) {
         return (true, true);
     }
     match crate::verify::bundle_summary(section) {
-        Some(summary) => (summary.failed == 0, summary.indeterminate == 0),
+        Some(summary) => (
+            summary.total > 0 && summary.failed == 0,
+            summary.indeterminate == 0,
+        ),
         None => (false, false),
     }
 }
@@ -646,12 +788,17 @@ mod tests {
     fn test_evaluate_promotion_total_on_garbage_inputs() {
         // Neither input is remotely bundle-shaped: every check fails
         // closed, the decision is hold, and nothing panics.
+        // PHASE-8 GATE UPDATE (finding 4): a garbage bundle now fails
+        // ALL SIX checks — the verification checks are vacuously true
+        // only for an explicit `(verification nil)` pair in a readable
+        // body, never for a bundle with no readable body at all.
         let result = evaluate_promotion(&Sexpr::sym("junk"), &Sexpr::Int(7));
         assert_eq!(
             result.print(),
             "(promotion-result ((policy nil) (decision hold) (checks \
-             ((no-error-diagnostics nil) (all-nodes-succeeded nil) (verification-passed t) \
-             (no-indeterminate-verification t) (traceability-complete nil)))))"
+             ((no-error-diagnostics nil) (all-artifacts-present nil) \
+             (all-nodes-succeeded nil) (verification-passed nil) \
+             (no-indeterminate-verification nil) (traceability-complete nil)))))"
         );
     }
 
