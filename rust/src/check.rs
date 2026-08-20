@@ -123,7 +123,8 @@ impl Checker {
                     self.check_capitalization_non_mode(&f.name);
                     self.add_flow(&f.name);
                 }
-                Decl::Application(_)
+                Decl::Const(_)
+                | Decl::Application(_)
                 | Decl::Invariant(_)
                 | Decl::Constraint(_)
                 | Decl::Synthesis(_)
@@ -148,6 +149,9 @@ impl Checker {
                 }
                 Decl::Constraint(con) => {
                     self.check_constraint_decl(con);
+                }
+                Decl::Acceptance(acc) => {
+                    self.check_acceptance_decl(acc);
                 }
                 _ => {}
             }
@@ -327,6 +331,12 @@ impl Checker {
             ModeExpr::Refined { name, .. } => {
                 self.check_mode_ref(name);
             }
+            ModeExpr::RefinedSym { name, .. } => {
+                // The bounds are constant references, resolved (or
+                // diagnosed E209) by the elaborator's substitution pass;
+                // only the primitive name is a mode reference.
+                self.check_mode_ref(name);
+            }
         }
     }
 
@@ -479,6 +489,60 @@ impl Checker {
         }
     }
 
+    /// v0.2 acceptance-actor binding (design feature 3): inside each
+    /// property's `generate` pack, an `of`-bound pair (`actor <gen> of
+    /// <actor-name>`) must name a declared actor (closed world — the
+    /// existing unresolved-reference error class), while a plain
+    /// two-element `actor <gen>` pair whose generator symbol matches no
+    /// declared actor earns a W410 `unresolved-acceptance-actor`
+    /// warning: the free-symbol style keeps working, visibly.
+    fn check_acceptance_decl(&mut self, acc: &AcceptanceDecl) {
+        for block in &acc.blocks {
+            let AcceptanceBlock::Property { body, .. } = block else {
+                continue;
+            };
+            for item in body {
+                if item.key.text != "generate" {
+                    continue;
+                }
+                let PackValue::Nested(pairs) = &item.value else {
+                    continue;
+                };
+                for pair in pairs {
+                    if let Some(target) = of_bound_actor(&pair.value) {
+                        if !self.symtab.actors.contains_key(&target.text) {
+                            self.diag(
+                                Severity::Error,
+                                "E203",
+                                target.span,
+                                format!(
+                                    "acceptance generator '{}' binds unknown \
+                                     actor '{}' via `of`",
+                                    pair.key.text, target.text
+                                ),
+                            );
+                        }
+                    } else if pair.key.text == "actor" {
+                        if let PackValue::Word(generator) = &pair.value {
+                            if !self.symtab.actors.contains_key(&generator.text) {
+                                self.diag(
+                                    Severity::Warning,
+                                    "W410",
+                                    generator.span,
+                                    format!(
+                                        "unresolved-acceptance-actor: generator \
+                                         '{}' matches no declared actor",
+                                        generator.text
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn check_exports(&mut self, exports: &[Ident]) {
         for export in exports {
             // Check if the exported name is declared anywhere
@@ -584,6 +648,25 @@ impl Checker {
             span,
             message,
         });
+    }
+}
+
+/// The actor name an `of`-bound generate-pair value binds, if this value
+/// is the v0.2 three-word `of` capture (`<gen> of <actor-name>`).
+fn of_bound_actor(value: &PackValue) -> Option<&Ident> {
+    let PackValue::List(items) = value else {
+        return None;
+    };
+    if items.len() != 3 {
+        return None;
+    }
+    match (&items[0], &items[1], &items[2]) {
+        (PackValue::Word(_gen), PackValue::Word(kw), PackValue::Word(target))
+            if kw.text == "of" =>
+        {
+            Some(target)
+        }
+        _ => None,
     }
 }
 

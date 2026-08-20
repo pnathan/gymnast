@@ -653,7 +653,7 @@ fn gate8_verify_exits_nonzero_on_e601_duplicate_obligation_ids() {
     // diagnostics, and the CLI must exit nonzero with the error on
     // stderr instead of a silent exit 0.
     let src = fs::read_to_string("../examples/todo.gym").expect("read todo.gym");
-    let block = "  property viewer_cannot_mutate =\n    generate (actor authenticated_viewer, task valid_task)\n    execute create_task (actor, task)\n    must fails_with forbidden,\n";
+    let block = "  property viewer_cannot_mutate =\n    generate (actor authenticated_viewer of user, task valid_task)\n    execute create_task (actor, task)\n    must fails_with forbidden,\n";
     assert!(
         src.contains(block),
         "todo.gym's viewer_cannot_mutate block moved; update this test"

@@ -38,6 +38,8 @@ pub struct SpecDecl {
 pub enum Decl {
     /// use declaration.
     Use(UseDecl),
+    /// const declaration (v0.2 named integer constant).
+    Const(ConstDecl),
     /// application declaration.
     Application(ApplicationDecl),
     /// actor declaration.
@@ -73,6 +75,19 @@ pub struct UseDecl {
     pub version: String,
     /// Configuration arguments.
     pub args: Pack,
+    /// Source span.
+    pub span: Span,
+}
+
+/// Const declaration (v0.2): `const name = <int>`. The single
+/// authoritative binding for a business constant; substituted into every
+/// integer-expression reference position at elaboration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstDecl {
+    /// Constant name (lowercase snake, the value namespace).
+    pub name: Ident,
+    /// Integer value (the only value kind in v0.2).
+    pub value: i64,
     /// Source span.
     pub span: Span,
 }
@@ -143,6 +158,30 @@ pub enum ModeExpr {
         /// Upper bound (inclusive).
         hi: Option<i64>,
     },
+    /// Refined primitive where at least one bound is a named constant
+    /// reference (v0.2 const-expr in a refinement bound position, e.g.
+    /// `text (1..max_title)`). Kept as a separate variant so the
+    /// all-integer `Refined` shape — and every consumer matching on it —
+    /// is byte-for-byte unchanged; bounds resolve by substitution at
+    /// elaboration.
+    RefinedSym {
+        /// Type name (e.g., text, int).
+        name: Ident,
+        /// Lower bound (inclusive).
+        lo: Option<RefBound>,
+        /// Upper bound (inclusive).
+        hi: Option<RefBound>,
+    },
+}
+
+/// One refinement bound: an integer literal or a constant name to be
+/// resolved at elaboration (v0.2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RefBound {
+    /// Integer literal bound.
+    Int(i64),
+    /// Named constant reference.
+    Name(Ident),
 }
 
 /// A struct field with type-first syntax.

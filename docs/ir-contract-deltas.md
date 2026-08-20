@@ -584,3 +584,76 @@ in-file notes:
   `indeterminate` post-mutation with NO baseline entry at all counts
   as degraded; the reference's `mutator` closure field is replaced by
   the closed `Mutation` enum (no callable values in campaign data).
+
+## Surface v0.2 (phase 10)
+
+Surface features (`docs/surface-v0.2-design.md`) with no Lamedh
+counterpart at all — the reference surface has no constants, coverage
+checks, or acceptance-actor binding. Contract-bearing shapes:
+
+- **Constants header.** The IR module header gains a `:constants`
+  field, `(:constants ((name value source) ...))` — sorted by name,
+  PRESENT ONLY WHEN NON-EMPTY (a spec with no `const` declarations and
+  no integer `use` parameters has no `:constants` entry at all), and
+  fingerprinted like every module field. `source` is the bare sym
+  `spec` for a spec-level `const` and the profile-name STRING for a
+  binding contributed by a `use` clause's integer parameter
+  (`(sharing_limit 256 "oddities/profiles/todo_standard")`).
+  Non-integer `use` parameters (`identity_provider google`) bind no
+  constant and never appear in the header.
+- **Substitution-preserves-semantics contract** (the phase's cardinal
+  rule, pinned by `v02_oracle_test.rs` items 02/05): a const-spelled
+  spec and its literal-spelled twin elaborate to IRs whose NODES are
+  byte-identical in every partition — the IRs may differ only by the
+  constants header (and, when substitution fails, the new
+  diagnostics) — and therefore produce byte-identical verification
+  bundles (fingerprint included) and adequacy campaigns identical
+  except the subject's IR fingerprint. Substitution is position-aware:
+  predicate operands, property execute steps, scenario `when`
+  arguments, `must` operands, `under` values (including the
+  `(name unit)` quantity form), and `:min`/`:max` refinement bounds
+  substitute; clause heads, declaration names, error names and
+  `:errors` sets, generator symbols, scenario `then` values, and the
+  import node's `:arguments` never do. Offset folding
+  (`sharing_limit + 1` → 257) uses saturating arithmetic.
+- **New diagnostic codes.** `E209 unresolved-constant` (error): an
+  offset form `(+/- name N)` whose base names no declared constant,
+  anywhere; or a bare IDENT in a refinement bound / `under` value —
+  constants-only positions. Bare atoms in predicate positions remain
+  abstract predicates (no E209). `E210
+  invalid-constant-expression` (parse-time error): non-integer `const`
+  right-hand side, or a malformed const-expr (`name + name`). `E201`
+  extends to every duplicate-binding combination: const/const,
+  const/profile-param, and the same parameter bound by two `use`
+  clauses. `W408 uncovered-operation` / `W409 unexercised-transition`
+  (warnings): declared-intent-gated coverage checks — emitted only
+  when the acceptance `coverage` clause lists `every_operation` /
+  `every_transition`. "Covered" means EXERCISED THROUGH THE TRANSITION
+  MACHINERY under the trace suffix rule: an op named by a step but
+  backed by no behavior is uncovered (the flagship's `query_tasks`),
+  and so is an op/behavior whose transition no step suffix-matches
+  (the flagship's `invite` / `invite_user`). `W410
+  unresolved-acceptance-actor` (warning): an `actor`-keyed generate
+  pair without `of` whose generator symbol matches no declared actor.
+  An unknown actor after `of` is `E203`, the existing unknown-actor
+  reference class.
+- **Acceptance capture and obligation shapes.** An `of`-bound generate
+  pair is captured as `(var (gen of actor))` — nested three-element
+  value — while the two-element `(var gen)` shape is unchanged. The
+  lowered property obligation carries `(actor-of <actor>)` IMMEDIATELY
+  AFTER `(generate ...)`; unbound pairs contribute no `actor-of`.
+- **Bundle field order** gains `coverage-diagnostics` after
+  `transition-diagnostics` (before `diagnostics`):
+  `schema obligations results summary coverage environment-diagnostics
+  transition-diagnostics coverage-diagnostics diagnostics
+  source-diagnostics fingerprint`. The field is structural — always
+  present, empty when the spec declares no coverage intent. Coverage
+  diagnostic entries use the flat span-carrying diagnostic shape with
+  `(span 0 0)` (they attach to IR nodes, not source positions).
+- **Goldens.** All seven todo fixtures were regenerated exactly once
+  for this phase (constants header, `of user` captures and `actor-of`
+  entries, W408/W409 coverage-diagnostics). The semantic invariant was
+  asserted across the regeneration: the verification summary stayed
+  `(total 9) (passed 1) (failed 2) (skipped 4) (indeterminate 2)` and
+  the adequacy campaign stayed 5 survivors / `pass nil` — the bytes
+  moved, the verdicts did not.

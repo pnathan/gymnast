@@ -171,8 +171,19 @@ use std::process::Command;
 // Shared fixtures / helpers (not tests themselves).
 // ---------------------------------------------------------------------
 
-const TODO_IR_FINGERPRINT: &str = "fnv1a64:2580289592425819482";
-const TODO_PLAN_FINGERPRINT: &str = "fnv1a64:2556822733247637826";
+// INTEGRATOR RESOLUTION (phase 10, Stage 3): these two constants are
+// documented mirrors of the committed fixtures ("the todo-ir.sexpr /
+// todo-plan.sexpr fixture's fingerprint" at their use sites), not
+// independent pins. Phase 10's plan sanctions regenerating all todo
+// fixtures exactly once (surface v0.2: the IR module header gains the
+// `:constants` field and the acceptance node gains `of` actor
+// bindings, both fingerprinted), so the mirrors move with the
+// fixtures. The semantic invariant the fixtures sit under --
+// verification summary (total 9) (passed 1) (failed 2) (skipped 4)
+// (indeterminate 2), adequacy 5 survivors / pass nil -- was asserted
+// unchanged across the regeneration (v02_oracle_test.rs 08b/08c).
+const TODO_IR_FINGERPRINT: &str = "fnv1a64:-3913177298091201318";
+const TODO_PLAN_FINGERPRINT: &str = "fnv1a64:8269306821630827461";
 
 fn todo_ir() -> Ir {
     let src = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/todo.gym"))

@@ -36,6 +36,10 @@ pub enum TokenKind {
     Le,
     /// Arrow.
     Arrow,
+    /// Plus sign (v0.2 const-expr offset: `name + 1`).
+    Plus,
+    /// Minus sign (v0.2 const-expr offset: `name - 1`).
+    Minus,
     /// Double dot.
     DotDot,
     /// End of file.
@@ -221,6 +225,18 @@ impl<'a> Lexer<'a> {
                                 end: self.pos,
                             },
                         });
+                    } else if self.next_nonspace_is_digit() {
+                        // v0.2 const-expr offset (`name - 1`): `-` is a
+                        // token only when an integer follows, so a stray
+                        // `-` anywhere else stays the same E001 it has
+                        // always been.
+                        self.tokens.push(Token {
+                            kind: TokenKind::Minus,
+                            span: Span {
+                                start,
+                                end: self.pos,
+                            },
+                        });
                     } else {
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
@@ -230,6 +246,29 @@ impl<'a> Lexer<'a> {
                                 end: self.pos,
                             },
                             message: "unexpected token `-`, expected `->`".to_string(),
+                        });
+                    }
+                }
+                '+' => {
+                    self.pos += 1;
+                    if self.next_nonspace_is_digit() {
+                        // v0.2 const-expr offset (`name + 1`); see `-`.
+                        self.tokens.push(Token {
+                            kind: TokenKind::Plus,
+                            span: Span {
+                                start,
+                                end: self.pos,
+                            },
+                        });
+                    } else {
+                        self.diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
+                            code: "E001",
+                            span: Span {
+                                start,
+                                end: self.pos,
+                            },
+                            message: "unexpected token `+`".to_string(),
                         });
                     }
                 }
@@ -288,6 +327,18 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
+    }
+
+    /// True when the next non-whitespace byte after the current position
+    /// is an ASCII digit — the lookahead that keeps `+`/`-` tokens
+    /// confined to the v0.2 const-expr grammar (`IDENT ± INT`) without
+    /// changing how any other stray sign character lexes.
+    fn next_nonspace_is_digit(&self) -> bool {
+        let mut p = self.pos;
+        while p < self.bytes.len() && (self.bytes[p] as char).is_whitespace() {
+            p += 1;
+        }
+        p < self.bytes.len() && self.bytes[p].is_ascii_digit()
     }
 
     fn skip_whitespace_and_comments(&mut self) {

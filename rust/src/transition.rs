@@ -830,7 +830,10 @@ fn with_step_index(violation: Sexpr, index: usize) -> Sexpr {
 /// `""`, and a transition with no `:on` extracts operation `""` — under
 /// the plain rules `"" == ""` and `"svc/".ends_with("/" + "")` would
 /// both match, silently applying a transition the step never named.
-fn matches_operation(op: &str, s: &str) -> bool {
+/// `pub(crate)`: shared with `verify.rs`'s v0.2 coverage teeth, which
+/// must decide "exercised" with the trace machinery's OWN matching rule
+/// so coverage can never claim reach the executor would not grant.
+pub(crate) fn matches_operation(op: &str, s: &str) -> bool {
     if op.is_empty() || s.is_empty() {
         return false;
     }

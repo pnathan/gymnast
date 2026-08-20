@@ -227,7 +227,7 @@ fn gate2_adequacy_exits_nonzero_on_bundle_error_diagnostics() {
     // first-match baseline lookup would be unsound → adequacy must
     // refuse (verify already does), emitting no campaign at all.
     let src = fs::read_to_string("../examples/todo.gym").expect("read todo.gym");
-    let block = "  property viewer_cannot_mutate =\n    generate (actor authenticated_viewer, task valid_task)\n    execute create_task (actor, task)\n    must fails_with forbidden,\n";
+    let block = "  property viewer_cannot_mutate =\n    generate (actor authenticated_viewer of user, task valid_task)\n    execute create_task (actor, task)\n    must fails_with forbidden,\n";
     assert!(src.contains(block), "todo.gym block moved; update test");
     let doubled = src.replace(block, &format!("{}\n{}", block, block));
     let path = std::env::temp_dir().join(format!(

@@ -155,6 +155,96 @@ downstream are unchanged. The surface parser plus checker replaces
 `surface.lisp` + the name-resolution part of `elaborate.lisp`; the IR
 contract stays fixed.
 
+## Surface v0.2 (phase 10)
+
+Three additive features, derived from the maintenance probes in
+`docs/change-study.md` and specified in `docs/surface-v0.2-design.md`.
+No new pipeline stages; no semantic change to any existing verdict —
+the cardinal rule of the revision is that **substitution preserves
+semantics**: a const-spelled spec and its literal-spelled twin produce
+identical verification, adequacy, planning, and prompting results.
+
+### Named constants and live profile parameters
+
+```
+const sharing_limit = 256
+const max_title    = 200
+```
+
+- `const <snake_name> = <int-literal>` is a top-level declaration in
+  the value namespace (disjoint from modes). A non-integer right-hand
+  side is a parse-time `E210 invalid-constant-expression`.
+- Every INTEGER parameter of a resolved `use` clause ALSO binds its
+  key as a constant in spec scope (`use ... (sharing_limit 256, ...)`
+  binds `sharing_limit` = 256, source: the profile). Non-integer
+  parameters (`identity_provider google`) bind nothing. Duplicates —
+  const/const, const/profile-param, or the same parameter from two
+  `use` clauses — are `E201`, the standard duplicate shape.
+- A **const-expr** is `<name>`, `<name> + <int>`, or `<name> - <int>`
+  (nothing richer: `name + name` is E210). Const-exprs are accepted in
+  every integer-literal position:
+  - predicate comparison operands (`requires ... < sharing_limit`,
+    `fails ... when ... = sharing_limit`, invariant bodies including
+    under `for all`),
+  - scenario `when` step arguments,
+  - property / concurrency / fault `must` operands,
+  - workload `under` values, including the quantity form
+    (`duration dur min`),
+  - mode refinement bounds (`text (1..max_title)`).
+- **Substitution happens at elaboration**: every IR form downstream
+  carries the literal value, exactly as if the author had written it.
+  Never substituted: clause heads, declaration names, error names and
+  `!` error sets, generator symbols, scenario `then` values, and the
+  import node's recorded `:arguments` (provenance). The binding itself
+  survives into the IR module header's `:constants` field
+  (`((name value source) ...)`, sorted by name, present when
+  non-empty, fingerprinted like every header field).
+- `E209 unresolved-constant` (closed world, hard error): an offset
+  form `name + N` / `name - N` whose name is no declared constant,
+  anywhere; or a bare IDENT in a refinement bound or `under` value
+  (positions where only constants are legal). Bare atoms in predicate
+  positions remain abstract predicates, exactly as before.
+
+### Coverage clauses with teeth
+
+The acceptance `coverage (...)` clause is checked, not filed. When it
+lists `every_operation`, each interface operation must be EXERCISED
+THROUGH THE TRANSITION MACHINERY by some acceptance execute/when step
+(the trace machinery's suffix rule): an operation with no backing
+behavior is uncovered even when a step names it, and so is one whose
+transition no step reaches. `every_transition` checks each behavior
+the same way.
+
+- `W408 uncovered-operation` — names the operation and the acceptance
+  node.
+- `W409 unexercised-transition` — names the behavior and the
+  acceptance node.
+
+Warnings, not errors; they surface on `check`/`verify` stderr and fold
+into the verification bundle's `coverage-diagnostics` field (placed
+after `transition-diagnostics`). Flags the coverage clause does not
+list produce no checks.
+
+### Acceptance actors bind to declared actors
+
+```
+generate (actor authenticated_editor of user, task valid_task)
+```
+
+- `of <actor-name>` binds the generator symbol to a declared actor;
+  an unknown actor name is a closed-world error (E203, the existing
+  unknown-actor reference class). The binding lands in the lowered
+  obligation as `(actor-of <name>)`, immediately after
+  `(generate ...)`.
+- Without `of`, an `actor`-keyed pair whose generator symbol matches
+  no declared actor warns `W410 unresolved-acceptance-actor` — the
+  free-symbol style keeps working, visibly.
+
+Flagship consequence: `examples/todo.gym` carries `256` in exactly one
+place (the `use` clause); every other site references `sharing_limit`
+or `sharing_limit + 1`, and its verification summary and adequacy
+outcome are byte-for-byte unchanged from the literal spelling.
+
 ## Lexical summary
 
 - Comments: `#` to end of line (a nod to A68's brief comment symbol).

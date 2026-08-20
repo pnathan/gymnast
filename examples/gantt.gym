@@ -8,6 +8,8 @@ spec gantt = v 0.1 owner planning
 
 application gantt = (modules gantt, default_acceptance production)
 
+const plan_limit = 2000
+
 actor planner = person (identity saml_login (issuer, subject))
 
 mode PlanId     = opaque text
@@ -73,12 +75,12 @@ behavior add_activity = on gantt_service.add_activity (planner, request) (
 
   requires authenticated (planner);
   requires may_edit_plan (pre, planner, request.plan);
-  requires activity_count (pre, request.plan) < 2000;
+  requires activity_count (pre, request.plan) < plan_limit;
   requires acyclic_after_insert (pre, request);
   ensures  post = insert_activity (pre, request, result);
   returns  result;
   fails plan_full
-    when activity_count (pre, request.plan) = 2000
+    when activity_count (pre, request.plan) = plan_limit
     preserves all_state;
   fails dependency_cycle
     when not acyclic_after_insert (pre, request)
@@ -100,7 +102,7 @@ inv schedule_acyclic = on gantt_state
   always dependency_graph_has_no_cycles
 
 inv plan_ceiling = on gantt_state
-  always for all PlanId p: activity_count (p) <= 2000
+  always for all PlanId p: activity_count (p) <= plan_limit
 
 constraint planning_capacity = workload on gantt_service
   under (virtual_users 100, duration 15 min, read_p95 200 ms, write_p95 300 ms)
@@ -114,19 +116,19 @@ synthesis prototype = target go / stdlib (
 
 acceptance production = of gantt_app (
   property add_then_read =
-    generate (actor plan_editor, activity valid_activity)
+    generate (actor plan_editor of planner, activity valid_activity)
     execute (add_activity (actor, activity); read_schedule (actor, activity.plan))
     must contains_equivalent (result, activity),
 
   property outsider_cannot_add =
-    generate (actor outside_user, activity valid_activity)
+    generate (actor outside_user of planner, activity valid_activity)
     execute add_activity (actor, activity)
     must fails_with forbidden,
 
   scenario capacity_boundary = (
     given editor = plan_editor;
-    when add_distinct (editor, 2000); then succeeds;
-    when add_distinct (editor, 2001); then fails_with plan_full ),
+    when add_distinct (editor, plan_limit); then succeeds;
+    when add_distinct (editor, plan_limit + 1); then fails_with plan_full ),
 
   concurrency shift_race = (actors 100, schedule adversarial)
     must dangling_dependencies = 0,

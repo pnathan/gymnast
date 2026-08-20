@@ -34,8 +34,8 @@ use crate::ir::{Ir, IrNode};
 use crate::sexpr::Sexpr;
 use crate::transition::{
     self, apply_transition, counterexample, default_trace_step, eval_predicate3, execute_trace,
-    extract_transitions, make_initial_state, state_to_sexpr, trace_to_sexpr, Trace, TraceStep,
-    Verdict,
+    extract_transitions, make_initial_state, matches_operation, state_to_sexpr, trace_to_sexpr,
+    Trace, TraceStep, Transition, Verdict,
 };
 
 /// Schema tag for the compiled verification bundle.
@@ -167,6 +167,44 @@ fn clause_name(tail: &[Sexpr]) -> (Sexpr, String) {
     (name, text)
 }
 
+/// Splits v0.2 `of`-bound generate pairs out of a lowered `:generate`
+/// value: a pair `(var (gen of actor))` is normalized back to the
+/// contract's two-element `(var gen)` binding shape, and the bound actor
+/// names are returned in pair order for the obligation's `(actor-of
+/// ...)` fields. Pairs without an `of` capture pass through untouched.
+fn split_actor_of(generate: &Sexpr) -> (Sexpr, Vec<String>) {
+    let Some(pairs) = generate.as_list() else {
+        return (generate.clone(), vec![]);
+    };
+    let mut out_pairs = Vec::with_capacity(pairs.len());
+    let mut actor_names = Vec::new();
+    for pair in pairs {
+        let of_capture = pair.as_list().and_then(|items| {
+            if items.len() != 2 {
+                return None;
+            }
+            let inner = items[1].as_list()?;
+            if inner.len() == 3 && inner[1].as_sym() == Some("of") {
+                let actor = inner[2].as_sym()?;
+                Some((
+                    Sexpr::List(vec![items[0].clone(), inner[0].clone()]),
+                    actor.to_string(),
+                ))
+            } else {
+                None
+            }
+        });
+        match of_capture {
+            Some((normalized, actor)) => {
+                out_pairs.push(normalized);
+                actor_names.push(actor);
+            }
+            None => out_pairs.push(pair.clone()),
+        }
+    }
+    (Sexpr::List(out_pairs), actor_names)
+}
+
 fn lower_property_obligation(acceptance_id: &str, clause: &Sexpr, env: &Sexpr) -> Sexpr {
     let tail = transition::clause_tail(clause);
     let (name, name_str) = clause_name(tail);
@@ -181,7 +219,13 @@ fn lower_property_obligation(acceptance_id: &str, clause: &Sexpr, env: &Sexpr) -
         .cloned()
         .unwrap_or_else(nil);
 
-    Sexpr::List(vec![
+    // v0.2 actor binding (plan section B): each `of`-bound pair lowers
+    // to an `(actor-of <name>)` field IMMEDIATELY AFTER `(generate ...)`,
+    // with the generate pair itself back in the (variable generator)
+    // contract shape.
+    let (generate, actor_ofs) = split_actor_of(&generate);
+
+    let mut items = vec![
         Sexpr::sym("verification-obligation"),
         Sexpr::pair(
             "id",
@@ -191,10 +235,14 @@ fn lower_property_obligation(acceptance_id: &str, clause: &Sexpr, env: &Sexpr) -
         Sexpr::pair("source", Sexpr::Str(acceptance_id.to_string())),
         Sexpr::pair("name", name),
         Sexpr::pair("generate", generate),
-        Sexpr::pair("execute", execute),
-        Sexpr::pair("assertion", must),
-        Sexpr::pair("environment", env.clone()),
-    ])
+    ];
+    for actor in &actor_ofs {
+        items.push(Sexpr::pair("actor-of", Sexpr::sym(actor)));
+    }
+    items.push(Sexpr::pair("execute", execute));
+    items.push(Sexpr::pair("assertion", must));
+    items.push(Sexpr::pair("environment", env.clone()));
+    Sexpr::List(items)
 }
 
 fn lower_scenario_obligation(acceptance_id: &str, clause: &Sexpr, env: &Sexpr) -> Sexpr {
@@ -1102,6 +1150,156 @@ pub fn coverage_gaps(ir: &Ir, obligations: &[Sexpr]) -> Sexpr {
 }
 
 // -----------------------------------------------------------------------
+// Coverage teeth (v0.2, phase 10 section B; design feature 2).
+// -----------------------------------------------------------------------
+
+/// The operation name a trace step names: the head symbol of a call
+/// step, or the symbol itself for a bare-symbol step (mirroring the
+/// executor's own `parse_step` reading).
+fn step_operation(step: &Sexpr) -> String {
+    match step {
+        Sexpr::List(items) => items
+            .first()
+            .map(|s| {
+                s.as_sym()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| s.print())
+            })
+            .unwrap_or_default(),
+        other => other.print(),
+    }
+}
+
+/// W408 `uncovered-operation` / W409 `unexercised-transition`: the
+/// acceptance `coverage` clause's declared intent, checked against what
+/// the transition machinery can actually reach. For each acceptance
+/// node whose coverage obligation lists `every_operation`, every
+/// interface operation that no property execute step or scenario `when`
+/// step EXERCISES is flagged W408; `every_transition` likewise flags
+/// every behavior no step reaches, W409. "Exercises" means exercised
+/// through the transition machinery: a step must uniquely suffix-match
+/// (`matches_operation`, the executor's own rule) a transition declared
+/// on that operation — an op with no behavior is uncovered even when a
+/// step names it (the flagship's `query_tasks`), and an op whose
+/// transition no step reaches is uncovered too. Flags the coverage
+/// clause does not list produce no checks; warnings, never errors — a
+/// gap is information, not invalidity.
+fn coverage_check_diagnostics(ir: &Ir, obligations: &[Sexpr]) -> Vec<Sexpr> {
+    let transitions = extract_transitions(ir);
+    let mut diags = Vec::new();
+
+    for acc in ir.nodes_of_kind("acceptance") {
+        let for_this_acc = |o: &&Sexpr| {
+            obligation_field(o, "source").and_then(|s| s.as_str()) == Some(acc.id.as_str())
+        };
+        let coverage_ob = obligations
+            .iter()
+            .find(|o| obligation_kind(o) == "coverage" && for_this_acc(o));
+        let Some(cov) = coverage_ob else {
+            continue;
+        };
+        let want_ops = obligation_field(cov, "every_operation")
+            .map(is_truthy)
+            .unwrap_or(false);
+        let want_transitions = obligation_field(cov, "every_transition")
+            .map(is_truthy)
+            .unwrap_or(false);
+        if !want_ops && !want_transitions {
+            continue;
+        }
+
+        // Every step this acceptance's properties execute and its
+        // scenarios reach through `when` — the same step sets the
+        // reference verification runs.
+        let mut steps: Vec<Sexpr> = Vec::new();
+        for o in obligations.iter().filter(|o| for_this_acc(o)) {
+            match obligation_kind(o) {
+                "property" => {
+                    let execute = obligation_field(o, "execute").cloned().unwrap_or_else(nil);
+                    if is_truthy(&execute) {
+                        steps.extend(execute_steps(&execute));
+                    }
+                }
+                "scenario" => {
+                    let steps_field = obligation_field(o, "steps").cloned().unwrap_or_else(nil);
+                    steps.extend(scenario_trace_steps(steps_field.as_list().unwrap_or(&[])));
+                }
+                _ => {}
+            }
+        }
+
+        // Exercised = uniquely matched under the executor's suffix rule
+        // (an ambiguous step applies no transition, so it exercises
+        // nothing).
+        let mut exercised_ops: Vec<&str> = Vec::new();
+        let mut exercised_transitions: Vec<&str> = Vec::new();
+        for step in &steps {
+            let op = step_operation(step);
+            if op.is_empty() {
+                continue;
+            }
+            let matched: Vec<&Transition> = transitions
+                .iter()
+                .filter(|t| matches_operation(&t.operation, &op))
+                .collect();
+            if matched.len() == 1 {
+                exercised_ops.push(matched[0].operation.as_str());
+                exercised_transitions.push(matched[0].id.as_str());
+            }
+        }
+
+        if want_ops {
+            for iface in ir.nodes_of_kind("interface") {
+                for clause in &iface.clauses {
+                    let Some(items) = clause.as_list() else {
+                        continue;
+                    };
+                    let head = items.first().and_then(|h| h.as_sym());
+                    if head != Some("command") && head != Some("query") {
+                        continue;
+                    }
+                    let Some(op_name) = items.get(1).and_then(|n| n.as_sym()) else {
+                        continue;
+                    };
+                    let qualified = format!("{}/{}", iface.name, op_name);
+                    if !exercised_ops.iter().any(|o| *o == qualified) {
+                        diags.push(diag_sexpr(
+                            "warning",
+                            "W408",
+                            (0, 0),
+                            format!(
+                                "uncovered-operation: {} is not exercised through \
+                                 any transition by the acceptance steps of {}",
+                                qualified, acc.id
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if want_transitions {
+            for t in &transitions {
+                if !exercised_transitions.iter().any(|id| *id == t.id) {
+                    diags.push(diag_sexpr(
+                        "warning",
+                        "W409",
+                        (0, 0),
+                        format!(
+                            "unexercised-transition: {} is not reached by any \
+                             acceptance step of {}",
+                            t.id, acc.id
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    diags
+}
+
+// -----------------------------------------------------------------------
 // The verification bundle.
 // -----------------------------------------------------------------------
 
@@ -1204,6 +1402,7 @@ fn compile_verification_without_fingerprint(ir: &Ir) -> Sexpr {
 
     let coverage = coverage_gaps(ir, &obligations);
     let transition_diags = transition::check_transition_refs(ir);
+    let coverage_check_diags = coverage_check_diagnostics(ir, &obligations);
     let bundle_diags = duplicate_obligation_diagnostics(&obligations);
 
     Sexpr::List(vec![
@@ -1229,6 +1428,12 @@ fn compile_verification_without_fingerprint(ir: &Ir) -> Sexpr {
             // calculus's total-but-silent write-to-undeclared behavior
             // becomes visible in the artifact.
             Sexpr::pair("transition-diagnostics", Sexpr::List(transition_diags)),
+            // W408 uncovered-operation / W409 unexercised-transition
+            // (v0.2 coverage teeth): the declared coverage intent,
+            // checked against the interface and the transitions the
+            // acceptance steps actually reach. The field is structural
+            // (always present); the checks are declared-intent-gated.
+            Sexpr::pair("coverage-diagnostics", Sexpr::List(coverage_check_diags)),
             // The bundle's own diagnostics (plan section D: E601
             // duplicate-obligation-id), distinct from `source-diagnostics`
             // below (the IR's diagnostics, unrelated to this bundle).
@@ -1279,6 +1484,7 @@ pub fn bundle_error_diagnostics(bundle: &Sexpr) -> Vec<String> {
     for key in [
         "diagnostics",
         "transition-diagnostics",
+        "coverage-diagnostics",
         "environment-diagnostics",
         "source-diagnostics",
     ] {

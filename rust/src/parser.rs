@@ -131,6 +131,7 @@ impl Parser {
         matches!(
             name,
             "use"
+                | "const"
                 | "application"
                 | "actor"
                 | "mode"
@@ -218,6 +219,8 @@ impl Parser {
             TokenKind::Lt => "<".to_string(),
             TokenKind::Le => "<=".to_string(),
             TokenKind::Arrow => "->".to_string(),
+            TokenKind::Plus => "+".to_string(),
+            TokenKind::Minus => "-".to_string(),
             TokenKind::DotDot => "..".to_string(),
             TokenKind::Eof => "EOF".to_string(),
         }
@@ -413,6 +416,7 @@ impl Parser {
         match self.peek_kind() {
             TokenKind::Ident(name) => match name.as_str() {
                 "use" => self.parse_use().map(Decl::Use),
+                "const" => self.parse_const().map(Decl::Const),
                 "application" => {
                     let start_span = self.peek().span;
                     self.advance();
@@ -551,6 +555,44 @@ impl Parser {
             args,
             span: start_span.join(end_span),
         })
+    }
+
+    /// Parse const declaration (v0.2): `const name = <int-literal>`.
+    /// Any non-integer right-hand side is a parse-time E210
+    /// (`invalid-constant-expression`) — text constants are not in v0.2.
+    pub fn parse_const(&mut self) -> Option<ConstDecl> {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'const'
+
+        let name = self.parse_ident()?;
+
+        self.expect(TokenKind::Eq, "`=`")?;
+
+        match self.peek_kind() {
+            TokenKind::Int(v) => {
+                let value = *v;
+                let end_token = self.advance();
+                Some(ConstDecl {
+                    name,
+                    value,
+                    span: start_span.join(end_token.span),
+                })
+            }
+            _ => {
+                self.diags.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "E210",
+                    span: self.peek().span,
+                    message: format!(
+                        "invalid-constant-expression: const '{}' requires an \
+                         integer literal value, got `{}`",
+                        name.text,
+                        self.token_display()
+                    ),
+                });
+                None
+            }
+        }
     }
 
     /// Parse actor declaration: `actor name = kind (attrs...)`
@@ -736,6 +778,19 @@ impl Parser {
                     if self.peek_kind() == &TokenKind::DotDot {
                         self.advance();
 
+                        // v0.2: an IDENT upper bound is a constant
+                        // reference (`text (1..max_title)`), resolved by
+                        // substitution at elaboration.
+                        if matches!(self.peek_kind(), TokenKind::Ident(_)) {
+                            let hi_name = self.parse_ident()?;
+                            self.expect(TokenKind::RParen, "`)`")?;
+                            return Some(ModeExpr::RefinedSym {
+                                name,
+                                lo: Some(RefBound::Int(lo_val)),
+                                hi: Some(RefBound::Name(hi_name)),
+                            });
+                        }
+
                         let hi = if let TokenKind::Int(h) = self.peek_kind() {
                             let h_val = *h;
                             self.advance();
@@ -754,6 +809,19 @@ impl Parser {
                 } else if self.peek_kind() == &TokenKind::DotDot {
                     // Handle refined type like text(..20000)
                     self.advance();
+
+                    // v0.2: `text (..max_title)` — IDENT bound is a
+                    // constant reference.
+                    if matches!(self.peek_kind(), TokenKind::Ident(_)) {
+                        let hi_name = self.parse_ident()?;
+                        self.expect(TokenKind::RParen, "`)`")?;
+                        return Some(ModeExpr::RefinedSym {
+                            name,
+                            lo: None,
+                            hi: Some(RefBound::Name(hi_name)),
+                        });
+                    }
+
                     let hi = if let TokenKind::Int(h) = self.peek_kind() {
                         let h_val = *h;
                         self.advance();
@@ -764,6 +832,33 @@ impl Parser {
 
                     self.expect(TokenKind::RParen, "`)`")?;
                     return Some(ModeExpr::Refined { name, lo: None, hi });
+                } else if matches!(self.peek_kind(), TokenKind::Ident(_))
+                    && matches!(
+                        self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                        Some(TokenKind::DotDot)
+                    )
+                {
+                    // v0.2: `text (max_title..N)` / `(a..b)` — IDENT lower
+                    // bound is a constant reference. The one-token DotDot
+                    // lookahead keeps `Page (Task)`-style type arguments
+                    // on their existing path.
+                    let lo_name = self.parse_ident()?;
+                    self.advance(); // consume '..'
+                    let hi = match self.peek_kind() {
+                        TokenKind::Int(h) => {
+                            let h_val = *h;
+                            self.advance();
+                            Some(RefBound::Int(h_val))
+                        }
+                        TokenKind::Ident(_) => Some(RefBound::Name(self.parse_ident()?)),
+                        _ => None,
+                    };
+                    self.expect(TokenKind::RParen, "`)`")?;
+                    return Some(ModeExpr::RefinedSym {
+                        name,
+                        lo: Some(RefBound::Name(lo_name)),
+                        hi,
+                    });
                 }
 
                 // Not a refined type, parse as type arguments
@@ -1733,10 +1828,15 @@ impl Parser {
             // rule, `f (x, y)` inside a group would lower as a key/value
             // pair, indistinguishable from `(class nano)`.
             let ident_headed = matches!(self.peek_kind(), TokenKind::Ident(_));
+            // `+`/`-` join the value-head set (v0.2): `cap + 1` inside a
+            // group is one const-expr VALUE, never a key/value item.
             let is_value_head = ident_headed
                 && matches!(
                     self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                    Some(TokenKind::Dot) | Some(TokenKind::LParen)
+                    Some(TokenKind::Dot)
+                        | Some(TokenKind::LParen)
+                        | Some(TokenKind::Plus)
+                        | Some(TokenKind::Minus)
                 );
             if ident_headed && !is_value_head {
                 if let Some(item) = self.parse_pack_item() {
@@ -1835,6 +1935,13 @@ impl Parser {
             TokenKind::Ident(_) => {
                 let first_ident = self.parse_ident()?;
 
+                if matches!(self.peek_kind(), TokenKind::Plus | TokenKind::Minus) {
+                    // v0.2 const-expr offset as a pack value (`cap + 1` in
+                    // scenario `when` arguments or workload `under`
+                    // values), captured call-shaped as `(+ cap 1)`.
+                    return self.parse_pack_const_offset(first_ident);
+                }
+
                 if self.peek_kind() == &TokenKind::LParen {
                     // Call. A keyword-argument group becomes ONE combined
                     // Nested pack (`args: [Nested(pack)]` per the plan);
@@ -1922,6 +2029,46 @@ impl Parser {
                 });
                 // Advance to prevent infinite loops
                 self.advance();
+                None
+            }
+        }
+    }
+
+    /// The tail of a const-expr offset in pack-value position: the
+    /// caller has just parsed `name` and sees `+`/`-`. `IDENT ± INT` is
+    /// the whole grammar (v0.2): anything else after the sign is a
+    /// parse-time E210 (`invalid-constant-expression`).
+    fn parse_pack_const_offset(&mut self, first_ident: Ident) -> Option<PackValue> {
+        let op_token = self.advance();
+        let op_text = match op_token.kind {
+            TokenKind::Plus => "+",
+            TokenKind::Minus => "-",
+            _ => return None, // unreachable: caller checked the kind
+        };
+        match self.peek_kind() {
+            TokenKind::Int(n) => {
+                let n_val = *n;
+                self.advance();
+                Some(PackValue::Call {
+                    name: Ident {
+                        text: op_text.to_string(),
+                        span: op_token.span,
+                    },
+                    args: vec![PackValue::Word(first_ident), PackValue::Int(n_val)],
+                })
+            }
+            _ => {
+                self.diags.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "E210",
+                    span: self.peek().span,
+                    message: format!(
+                        "invalid-constant-expression: expected an integer \
+                         after `{}`, got `{}`",
+                        op_text,
+                        self.token_display()
+                    ),
+                });
                 None
             }
         }
@@ -2112,6 +2259,68 @@ impl Parser {
     }
 
     fn parse_expr_inner(&mut self) -> Option<Expr> {
+        let base = self.parse_expr_base()?;
+        if matches!(self.peek_kind(), TokenKind::Plus | TokenKind::Minus) {
+            return self.parse_expr_const_offset(base);
+        }
+        Some(base)
+    }
+
+    /// The tail of a const-expr offset in expression position: `lhs` was
+    /// just parsed and the current token is `+`/`-`. Only `IDENT ± INT`
+    /// is in the grammar (v0.2); a non-identifier left side or a
+    /// non-integer right side is a parse-time E210.
+    fn parse_expr_const_offset(&mut self, lhs: Expr) -> Option<Expr> {
+        let op_token = self.advance();
+        let op_text = match op_token.kind {
+            TokenKind::Plus => "+",
+            TokenKind::Minus => "-",
+            _ => return None, // unreachable: caller checked the kind
+        };
+        let lhs_is_bare_name = matches!(&lhs, Expr::Path(segs) if segs.len() == 1);
+        if !lhs_is_bare_name {
+            self.diags.push(Diagnostic {
+                severity: Severity::Error,
+                code: "E210",
+                span: op_token.span,
+                message: format!(
+                    "invalid-constant-expression: `{}` applies to a bare \
+                     constant name and an integer only",
+                    op_text
+                ),
+            });
+            return None;
+        }
+        match self.peek_kind() {
+            TokenKind::Int(n) => {
+                let n_val = *n;
+                self.advance();
+                Some(Expr::Call {
+                    name: Ident {
+                        text: op_text.to_string(),
+                        span: op_token.span,
+                    },
+                    args: vec![lhs, Expr::Int(n_val)],
+                })
+            }
+            _ => {
+                self.diags.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "E210",
+                    span: self.peek().span,
+                    message: format!(
+                        "invalid-constant-expression: expected an integer \
+                         after `{}`, got `{}`",
+                        op_text,
+                        self.token_display()
+                    ),
+                });
+                None
+            }
+        }
+    }
+
+    fn parse_expr_base(&mut self) -> Option<Expr> {
         match self.peek_kind() {
             TokenKind::Int(val) => {
                 let int_val = *val;

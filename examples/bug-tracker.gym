@@ -8,6 +8,8 @@ spec bug_tracker = v 0.1 owner engineering
 
 application bug_tracker = (modules bug_tracker, default_acceptance production)
 
+const backlog_limit = 5000
+
 actor member = person (identity oidc_login (issuer, subject))
 
 mode BugId     = opaque text
@@ -76,11 +78,11 @@ behavior file_bug = on tracker_service.file_bug (member, request) (
 
   requires authenticated (member);
   requires is_project_member (pre, member, request.project);
-  requires open_bug_count (pre, request.project) < 5000;
+  requires open_bug_count (pre, request.project) < backlog_limit;
   ensures  post = journal_bug (pre, request, result);
   returns  result;
   fails backlog_full
-    when open_bug_count (pre, request.project) = 5000
+    when open_bug_count (pre, request.project) = backlog_limit
     preserves all_state;
   emits bug_filed exactly_once_logically )
 
@@ -111,7 +113,7 @@ inv no_orphan_resolutions = on tracker_state
   always every_resolution_references_existing_bug
 
 inv backlog_ceiling = on tracker_state
-  always for all ProjectId p: open_bug_count (p) <= 5000
+  always for all ProjectId p: open_bug_count (p) <= backlog_limit
 
 constraint triage_capacity = workload on tracker_service
   under (virtual_users 300, duration 20 min, read_p95 250 ms, write_p95 400 ms)
@@ -125,19 +127,19 @@ synthesis prototype = target python / django (
 
 acceptance production = of tracker_app (
   property file_then_list =
-    generate (actor project_member, bug valid_bug)
+    generate (actor project_member of member, bug valid_bug)
     execute (file_bug (actor, bug); list_bugs (actor, bug.project))
     must contains_equivalent (result, bug),
 
   property nonmember_cannot_file =
-    generate (actor outside_user, bug valid_bug)
+    generate (actor outside_user of member, bug valid_bug)
     execute file_bug (actor, bug)
     must fails_with forbidden,
 
   scenario backlog_boundary = (
     given reporter = project_member;
-    when file_distinct (reporter, 5000); then succeeds;
-    when file_distinct (reporter, 5001); then fails_with backlog_full ),
+    when file_distinct (reporter, backlog_limit); then succeeds;
+    when file_distinct (reporter, backlog_limit + 1); then fails_with backlog_full ),
 
   concurrency resolve_race = (actors 300, schedule adversarial)
     must duplicate_resolutions = 0,

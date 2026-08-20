@@ -85,17 +85,17 @@ behavior invite_user = on todo_service.invite (user, request) (
   atomic list_membership request.list, idempotency command_key;
 
   requires is_owner (pre, user, request.list);
-  requires other_principal_count (pre, request.list) < 256;
+  requires other_principal_count (pre, request.list) < sharing_limit;
   ensures  post = invite_principal (pre, request);
   fails sharing_limit
-    when other_principal_count (pre, request.list) = 256
+    when other_principal_count (pre, request.list) = sharing_limit
     preserves all_state )
 
 inv owner_isolation = on todo_state
   always no_observation_without_active_membership
 
 inv sharing_limit = on todo_state
-  always for all TodoList list: other_principal_count (list) <= 256
+  always for all TodoList list: other_principal_count (list) <= sharing_limit
 
 constraint collaborative_capacity = workload on todo_service
   under (virtual_users 500, duration 30 min, read_p95 300 ms, write_p95 500 ms)
@@ -109,22 +109,22 @@ synthesis prototype = target ruby / rails (
 
 acceptance production = of todo_app (
   property create_then_read =
-    generate (actor authenticated_editor, task valid_task)
+    generate (actor authenticated_editor of user, task valid_task)
     execute (create_task (actor, task); query_tasks (actor, task.list))
     must contains_equivalent (result, task),
 
   property viewer_cannot_mutate =
-    generate (actor authenticated_viewer, task valid_task)
+    generate (actor authenticated_viewer of user, task valid_task)
     execute create_task (actor, task)
     must fails_with forbidden,
 
   scenario sharing_boundary = (
     given owner = authenticated_owner;
-    when invite_distinct (owner, 256); then succeeds;
-    when invite_distinct (owner, 257); then fails_with sharing_limit ),
+    when invite_distinct (owner, sharing_limit); then succeeds;
+    when invite_distinct (owner, sharing_limit + 1); then fails_with sharing_limit ),
 
   concurrency boundary_race = (actors 500, schedule adversarial)
-    must active_and_pending_other_principals <= 256,
+    must active_and_pending_other_principals <= sharing_limit,
 
   fault durable_restart = after acknowledged_write inject restart
     must read_your_acknowledged_write,
