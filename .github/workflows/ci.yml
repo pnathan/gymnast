@@ -80,7 +80,8 @@ jobs:
           diff /tmp/verify-one.sexpr tests/fixtures/todo-verify.sexpr
       - name: Verify exits 1 on a known-bad spec
         run: |
-          if cargo run -- verify /tmp/bad-plan.gym; then
+          printf 'spec t = v 0.1 owner o exports A\n\nmode A = opaque text\ninv a = on s always p\ninv a = on s always q\n' > /tmp/bad-verify.gym
+          if cargo run -- verify /tmp/bad-verify.gym; then
             echo "verify accepted a spec with a duplicate semantic id" >&2; exit 1
           fi
       - name: Reproducible compilation

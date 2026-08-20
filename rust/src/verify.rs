@@ -32,9 +32,8 @@ use crate::diag::diag_sexpr;
 use crate::ir::{Ir, IrNode};
 use crate::sexpr::Sexpr;
 use crate::transition::{
-    self, apply_transition, counterexample, default_trace_step, eval_predicate, execute_trace,
-    extract_transitions, make_initial_state, state_to_sexpr, trace_to_sexpr, Trace, TraceStep,
-    Transition,
+    self, apply_transition, counterexample, default_trace_step, execute_trace, extract_transitions,
+    make_initial_state, state_to_sexpr, trace_to_sexpr, Trace, TraceStep,
 };
 
 /// Schema tag for the compiled verification bundle.
@@ -455,6 +454,40 @@ fn make_verification_result(
     ])
 }
 
+/// A verification result carrying an explicit `basis` field:
+/// `(basis checked)` when every evaluation branch was actually computed,
+/// `(basis symbolic)` when any permissive default participated in the
+/// verdict (phase-6 gate, finding 1 — a consumer must be able to tell a
+/// vacuous pass from a real one without archaeology).
+fn make_verification_result_with_basis(
+    obligation_id: &str,
+    status: &str,
+    trace: Option<&Trace>,
+    counterexamples: Vec<Sexpr>,
+    diagnostics: Vec<Sexpr>,
+    symbolic: Option<bool>,
+) -> Sexpr {
+    let mut items = vec![
+        Sexpr::sym("verification-result"),
+        Sexpr::pair("schema", Sexpr::Str(VERIFY_SCHEMA.to_string())),
+        Sexpr::pair("obligation-id", Sexpr::Str(obligation_id.to_string())),
+        Sexpr::pair("status", Sexpr::sym(status)),
+    ];
+    if let Some(sym) = symbolic {
+        items.push(Sexpr::pair(
+            "basis",
+            Sexpr::sym(if sym { "symbolic" } else { "checked" }),
+        ));
+    }
+    items.push(Sexpr::pair(
+        "trace",
+        trace.map(trace_to_sexpr).unwrap_or_else(nil),
+    ));
+    items.push(Sexpr::pair("counterexamples", Sexpr::List(counterexamples)));
+    items.push(Sexpr::pair("diagnostics", Sexpr::List(diagnostics)));
+    Sexpr::List(items)
+}
+
 /// The property/scenario execute-value step-splitting rule (plan section
 /// B, oracle ambiguity 5): if `execute`'s first element is itself a
 /// list, `execute` is the multi-step case (each element one step);
@@ -462,6 +495,12 @@ fn make_verification_result(
 /// including nil.
 fn execute_steps(execute: &Sexpr) -> Vec<Sexpr> {
     if let Some(items) = execute.as_list() {
+        // Plan section B: a `(sequence step1 step2 ...)` form unwraps to
+        // its steps (phase-6 gate, finding 6 — reachable from the
+        // surface as `execute sequence (a (x), b (y))`).
+        if items.first().and_then(|h| h.as_sym()) == Some("sequence") {
+            return items[1..].to_vec();
+        }
         if let Some(first) = items.first() {
             if first.as_list().is_some() {
                 return items.to_vec();
@@ -494,7 +533,7 @@ fn verify_property_against_reference(ir: &Ir, obligation: &Sexpr) -> Sexpr {
             "warning",
             "no-execute-spec",
             (0, 0),
-            "property has no execute clause".to_string(),
+            format!("property {} has no execute clause", ob_id),
         );
         return make_verification_result(&ob_id, "skipped", None, vec![], vec![diag]);
     }
@@ -544,7 +583,7 @@ fn verify_scenario_against_reference(ir: &Ir, obligation: &Sexpr) -> Sexpr {
             "warning",
             "no-trace-steps",
             (0, 0),
-            "scenario produced no executable trace steps".to_string(),
+            format!("scenario {} produced no executable trace steps", ob_id),
         );
         return make_verification_result(&ob_id, "skipped", None, vec![], vec![diag]);
     }
@@ -557,37 +596,6 @@ fn verify_scenario_against_reference(ir: &Ir, obligation: &Sexpr) -> Sexpr {
         make_verification_result(&ob_id, "failed", Some(&trace), ces, vec![])
     }
 }
-
-/// First transition (in `extract_transitions` order) whose one-step
-/// application to `state` (actor/input both `None`, mirroring the
-/// reference) leaves `predicate` failing on the post-state; `None` if
-/// every transition's post-state keeps the predicate holding. Iterative
-/// (`for`, not recursion), so total and bounded by the transition count.
-fn find_invariant_post_violation(
-    predicate: &Sexpr,
-    transitions: &[Transition],
-    state: &transition::State,
-    ob_id: &str,
-) -> Option<Sexpr> {
-    for t in transitions {
-        let step = apply_transition(t, state, None, None);
-        if !eval_predicate(predicate, &step.post_state, None, None) {
-            return Some(Sexpr::List(vec![
-                Sexpr::sym("normalized-counterexample"),
-                Sexpr::pair("obligation-id", Sexpr::Str(ob_id.to_string())),
-                Sexpr::pair(
-                    "divergence-type",
-                    Sexpr::sym("invariant-violation-post-transition"),
-                ),
-                Sexpr::pair("predicate", predicate.clone()),
-                Sexpr::pair("state", state_to_sexpr(&step.post_state)),
-                Sexpr::pair("transition", Sexpr::Str(t.id.clone())),
-            ]));
-        }
-    }
-    None
-}
-
 /// Verifies an invariant obligation: its `:always` predicate against
 /// `make_initial_state`, then (if the initial state holds) against the
 /// post-state of applying EVERY extracted transition once (actor/input
@@ -599,7 +607,15 @@ fn verify_invariant_obligation(ir: &Ir, obligation: &Sexpr) -> Sexpr {
         .unwrap_or_else(nil);
     let state = make_initial_state(ir);
 
-    if !eval_predicate(&predicate, &state, None, None) {
+    // Basis tracking (phase-6 gate, finding 1): a verdict that rested on
+    // any permissive evaluator default is SYMBOLIC, not evidence, and the
+    // published result must say so — the verifier never claims more than
+    // it checked.
+    let (holds_initial, initial_checked) =
+        crate::transition::eval_predicate_basis(&predicate, &state, None, None);
+    let mut symbolic = !initial_checked;
+
+    if !holds_initial {
         let ce = Sexpr::List(vec![
             Sexpr::sym("normalized-counterexample"),
             Sexpr::pair("obligation-id", Sexpr::Str(ob_id.clone())),
@@ -607,14 +623,71 @@ fn verify_invariant_obligation(ir: &Ir, obligation: &Sexpr) -> Sexpr {
             Sexpr::pair("predicate", predicate.clone()),
             Sexpr::pair("state", state_to_sexpr(&state)),
         ]);
-        return make_verification_result(&ob_id, "failed", None, vec![ce], vec![]);
+        return make_verification_result_with_basis(
+            &ob_id,
+            "failed",
+            None,
+            vec![ce],
+            basis_diagnostics(symbolic, &predicate, &ob_id),
+            Some(symbolic),
+        );
     }
 
     let transitions = extract_transitions(ir);
-    match find_invariant_post_violation(&predicate, &transitions, &state, &ob_id) {
-        Some(ce) => make_verification_result(&ob_id, "failed", None, vec![ce], vec![]),
-        None => make_verification_result(&ob_id, "passed", None, vec![], vec![]),
+    for t in &transitions {
+        let step = apply_transition(t, &state, None, None);
+        let (holds_post, post_checked) =
+            crate::transition::eval_predicate_basis(&predicate, &step.post_state, None, None);
+        symbolic = symbolic || !post_checked;
+        if !holds_post {
+            let ce = Sexpr::List(vec![
+                Sexpr::sym("normalized-counterexample"),
+                Sexpr::pair("obligation-id", Sexpr::Str(ob_id.clone())),
+                Sexpr::pair(
+                    "divergence-type",
+                    Sexpr::sym("invariant-violation-post-transition"),
+                ),
+                Sexpr::pair("predicate", predicate.clone()),
+                Sexpr::pair("state", state_to_sexpr(&step.post_state)),
+                Sexpr::pair("transition", Sexpr::Str(t.id.clone())),
+            ]);
+            return make_verification_result_with_basis(
+                &ob_id,
+                "failed",
+                None,
+                vec![ce],
+                basis_diagnostics(symbolic, &predicate, &ob_id),
+                Some(symbolic),
+            );
+        }
     }
+    make_verification_result_with_basis(
+        &ob_id,
+        "passed",
+        None,
+        vec![],
+        basis_diagnostics(symbolic, &predicate, &ob_id),
+        Some(symbolic),
+    )
+}
+
+/// The info diagnostic marking a symbolically-based verdict, naming the
+/// predicate whose evaluation hit a permissive default.
+fn basis_diagnostics(symbolic: bool, predicate: &Sexpr, ob_id: &str) -> Vec<Sexpr> {
+    if !symbolic {
+        return vec![];
+    }
+    vec![diag_sexpr(
+        "info",
+        "I601",
+        (0, 0),
+        format!(
+            "symbolically-satisfied: {} verdict for {} rests on an unevaluated predicate form ({})",
+            "the",
+            ob_id,
+            predicate.print()
+        ),
+    )]
 }
 
 /// Top-level obligation dispatch. `property`/`scenario`/`invariant` run
@@ -636,8 +709,13 @@ pub fn verify_obligation(ir: &Ir, obligation: &Sexpr) -> Sexpr {
                 "deferred-verification",
                 (0, 0),
                 format!(
-                    "verification of {} obligations requires runtime execution",
-                    kind
+                    "verification of {} obligation {} requires runtime execution",
+                    if kind.is_empty() {
+                        "unknown-kind"
+                    } else {
+                        kind
+                    },
+                    ob_id
                 ),
             );
             make_verification_result(&ob_id, "skipped", None, vec![], vec![diag])
@@ -1002,6 +1080,11 @@ pub fn compile_verification(ir: &Ir) -> Sexpr {
             ),
             Sexpr::pair("coverage", coverage),
             Sexpr::pair("environment-diagnostics", Sexpr::List(env_diags)),
+            // The bundle is self-describing (phase-6 gate, finding 3): a
+            // bundle built over an IR carrying error diagnostics says so
+            // in the artifact itself, not only in a process exit code
+            // that a file consumer never sees.
+            Sexpr::pair("source-diagnostics", Sexpr::List(ir.diagnostics.clone())),
         ]),
     ])
 }

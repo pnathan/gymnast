@@ -112,3 +112,26 @@ These were bugs found in review and fixed to match what `verify.lisp` /
   reference behavior, pinned in `todo-verify.sexpr` (summary: 9
   obligations, 2 passed, 3 failed, 4 skipped); a smarter match rule is
   a tracked phase-7 decision, not a silent fix.
+- `verification-result` carries a `basis` field on invariant results —
+  `checked` when every evaluation branch was computed, `symbolic` when
+  any permissive default participated — plus an `I601
+  symbolically-satisfied` info diagnostic on symbolic verdicts. The
+  reference has neither; without them a vacuous pass is
+  indistinguishable from a real one (phase-6 gate, finding 1).
+- The `verification-bundle` carries `source-diagnostics` (the IR's own
+  diagnostics), so a bundle over a broken spec is self-describing.
+- The bundle carries NO fingerprint field, matching the reference —
+  unlike every other artifact in the crate. The phase-7 plan must
+  decide fingerprinting before the bundle becomes a cache participant
+  or promotion input.
+- Behavioral deltas from the reference state machine, all deliberate:
+  state writes update entries IN PLACE (the reference's put-assoc moves
+  the key to the tail, so state-key ordering differs and is
+  load-bearing for state-mismatch comparison); trace violations append
+  uniformly in order (the reference front-conses no-match violations
+  but appends invariant violations); a state entry holding nil
+  evaluates to nil (the reference's `(or value expr)` falls back to
+  the SYMBOL when the value is nil).
+- `ensures` postconditions are extracted but never checked by
+  `(succeeded)` outcomes — same as the reference; recorded here so the
+  honesty boundary is explicit.

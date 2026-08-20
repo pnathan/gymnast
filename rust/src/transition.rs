@@ -283,12 +283,44 @@ pub fn eval_predicate(
     actor: Option<&Sexpr>,
     input: Option<&Sexpr>,
 ) -> bool {
+    eval_predicate_basis(pred, state, actor, input).0
+}
+
+/// Like `eval_predicate`, but also reports the verdict's BASIS: `true`
+/// in the second slot means every branch of the evaluation was actually
+/// computed ("checked"); `false` means at least one permissive default
+/// fired — an atom/nil predicate, an unrecognized head, or a `<`/`<=`
+/// over non-integers — so the verdict is SYMBOLIC, not evidence
+/// (phase-6 gate, findings 1 and 4: a verifier must never let a vacuous
+/// verdict masquerade as a checked one).
+pub fn eval_predicate_basis(
+    pred: &Sexpr,
+    state: &State,
+    actor: Option<&Sexpr>,
+    input: Option<&Sexpr>,
+) -> (bool, bool) {
+    let mut checked = true;
+    let verdict = eval_predicate_inner(pred, state, actor, input, &mut checked);
+    (verdict, checked)
+}
+
+fn eval_predicate_inner(
+    pred: &Sexpr,
+    state: &State,
+    actor: Option<&Sexpr>,
+    input: Option<&Sexpr>,
+    checked: &mut bool,
+) -> bool {
     let items = match pred {
         Sexpr::List(items) => items,
-        _ => return true, // any atom (Sym/Str/Int)
+        _ => {
+            *checked = false;
+            return true; // any atom (Sym/Str/Int): symbolic default holds
+        }
     };
     if items.is_empty() {
-        return true; // nil
+        *checked = false;
+        return true; // nil: symbolic default holds
     }
     match items[0].as_sym() {
         Some("=") => {
@@ -296,24 +328,39 @@ pub fn eval_predicate(
             let b = eval_expr(&nth_arg(items, 2), state, actor, input);
             a == b
         }
-        Some("not") => !eval_predicate(&nth_arg(items, 1), state, actor, input),
+        Some("not") => !eval_predicate_inner(&nth_arg(items, 1), state, actor, input, checked),
         Some("and") => items[1..]
             .iter()
-            .all(|p| eval_predicate(p, state, actor, input)),
+            .all(|p| eval_predicate_inner(p, state, actor, input, checked)),
         Some("or") => items[1..]
             .iter()
-            .any(|p| eval_predicate(p, state, actor, input)),
+            .any(|p| eval_predicate_inner(p, state, actor, input, checked)),
         Some("<") => {
             let a = eval_expr(&nth_arg(items, 1), state, actor, input);
             let b = eval_expr(&nth_arg(items, 2), state, actor, input);
-            matches!((a.as_int(), b.as_int()), (Some(x), Some(y)) if x < y)
+            match (a.as_int(), b.as_int()) {
+                (Some(x), Some(y)) => x < y,
+                _ => {
+                    *checked = false; // total-false delta: not evidence
+                    false
+                }
+            }
         }
         Some("<=") => {
             let a = eval_expr(&nth_arg(items, 1), state, actor, input);
             let b = eval_expr(&nth_arg(items, 2), state, actor, input);
-            matches!((a.as_int(), b.as_int()), (Some(x), Some(y)) if x <= y)
+            match (a.as_int(), b.as_int()) {
+                (Some(x), Some(y)) => x <= y,
+                _ => {
+                    *checked = false;
+                    false
+                }
+            }
         }
-        _ => true, // unrecognized head (calls, forall, ...): symbolic default holds
+        _ => {
+            *checked = false;
+            true // unrecognized head (calls, forall, ...): symbolic default holds
+        }
     }
 }
 
