@@ -12,6 +12,8 @@ application chatbot = (modules chatbot, default_acceptance production)
 
 actor end_user = person (identity api_session (issuer, subject))
 
+actor moderator = person (identity staff_sso (issuer, subject))
+
 mode SessionId = opaque text
 mode MessageId = opaque text
 mode UserId    = opaque text
@@ -42,7 +44,7 @@ mode Session = struct (
 
 component chatbot_app = (
   responsibility "Own conversation state: sessions, alternating turns, bounded transcripts",
-  provides chat_service,
+  provides (chat_service, moderation_service),
   uses (session_identity, bot_engine, durable_store, clock, id_source) )
 
 interface chat_service = for end_user (
@@ -56,6 +58,13 @@ interface chat_service = for end_user (
   qry read_transcript = (SessionId session, opt Cursor cursor) Page (ChatMessage)
       ! (unauthenticated, forbidden, not_found, invalid_cursor) )
 
+interface moderation_service = for moderator (
+  cmd redact_message = (MessageId message, text reason) ChatMessage
+      ! (unauthenticated, forbidden, not_found, already_redacted),
+
+  cmd freeze_session = (SessionId session, text reason) Session
+      ! (unauthenticated, forbidden, not_found) )
+
 state chat_state = (
   of aggregate (Session, ChatMessage),
   owner chatbot_app,
@@ -67,6 +76,20 @@ state chat_state = (
 
 flow user_to_chat = end_user -> chat_service : cmd
   (grant authenticated_session, deny raw_session_secret)
+
+flow moderator_to_chat = moderator -> moderation_service : cmd
+  (grant staff_session, deny raw_sso_assertion)
+
+behavior redact_message = on moderation_service.redact_message (moderator, request) (
+  reads (messages), writes messages,
+  atomic message request.message, idempotency command_key;
+
+  requires is_moderator (pre, moderator);
+  ensures  post = redact_content (pre, request, result);
+  returns  result;
+  fails forbidden
+    when not is_moderator (pre, moderator)
+    preserves all_state )
 
 behavior post_message = on chat_service.post_message (end_user, request) (
   reads (sessions, messages), writes messages,

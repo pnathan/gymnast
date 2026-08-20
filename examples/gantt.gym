@@ -19,7 +19,7 @@ mode Cursor     = opaque text
 mode Page       = opaque text
 
 mode ActivityKind  = enum (task, milestone, summary)
-mode ActivityState = enum (planned, started, done, cancelled)
+mode ActivityState = enum (planned, started, blocked, done, cancelled)
 
 mode Anchor = union (day local_date, at zoned_datetime)
 
@@ -32,6 +32,7 @@ mode Activity = struct (
   Anchor start,
   Days duration,
   opt ActivityId depends_on,
+  opt UserId owner,
   Version version )
 
 mode ShiftReceipt = struct (

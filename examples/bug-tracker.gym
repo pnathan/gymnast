@@ -52,6 +52,9 @@ interface tracker_service = for member (
   cmd resolve_bug = (BugId bug, text note) Resolution
       ! (unauthenticated, forbidden, not_found, already_resolved),
 
+  cmd assign_bug = (BugId bug, UserId assignee) Bug
+      ! (unauthenticated, forbidden, not_found, already_resolved),
+
   qry list_bugs = (ProjectId project, opt Cursor cursor) Page (Bug)
       ! (unauthenticated, forbidden, not_found, invalid_cursor) )
 
@@ -90,6 +93,18 @@ behavior resolve_bug = on tracker_service.resolve_bug (member, request) (
   returns  result;
   fails forbidden
     when not may_resolve (pre, member, request.bug)
+    preserves all_state )
+
+behavior assign_bug = on tracker_service.assign_bug (member, request) (
+  reads (bugs, memberships), writes bugs,
+  atomic bug request.bug, idempotency command_key;
+
+  requires may_triage (pre, member, request.bug);
+  requires is_project_member (pre, request.assignee, request.bug);
+  ensures  post = record_assignment (pre, request, result);
+  returns  result;
+  fails forbidden
+    when not may_triage (pre, member, request.bug)
     preserves all_state )
 
 inv no_orphan_resolutions = on tracker_state
