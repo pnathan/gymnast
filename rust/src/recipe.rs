@@ -264,7 +264,7 @@ pub fn execute_recipe(ir: &Ir, node: &PlanNode) -> ExecutionResult {
         };
     }
 
-    let (ir_slice, mut diagnostics) = resolve_ir_slice(ir, &node.inputs);
+    let (ir_slice, mut diagnostics) = resolve_ir_slice(ir, &node.id, &node.inputs);
     let candidate = executor(&ir_slice, node);
 
     let firewall_diags = candidate_diagnostics(node, &candidate);

@@ -250,7 +250,11 @@ impl Ir {
 /// prompt side previously dropped unresolved ids via its own inline
 /// `filter_map`, with no diagnostic at all — this is the single
 /// resolution both callers now share, so they can never drift).
-pub fn resolve_ir_slice<'a>(ir: &'a Ir, inputs: &[String]) -> (Vec<&'a IrNode>, Vec<Sexpr>) {
+pub fn resolve_ir_slice<'a>(
+    ir: &'a Ir,
+    owner: &str,
+    inputs: &[String],
+) -> (Vec<&'a IrNode>, Vec<Sexpr>) {
     let mut slice = Vec::new();
     let mut warnings = Vec::new();
     for id in inputs {
@@ -260,7 +264,10 @@ pub fn resolve_ir_slice<'a>(ir: &'a Ir, inputs: &[String]) -> (Vec<&'a IrNode>, 
                 "warning",
                 "W405",
                 (0, 0),
-                format!("input {} does not resolve in the IR", id),
+                format!(
+                    "plan node {} declares input {} which does not resolve in the IR",
+                    owner, id
+                ),
             )),
         }
     }
@@ -298,7 +305,7 @@ mod tests {
             vec![],
         );
         let inputs = vec!["m/type/B".to_string(), "m/type/A".to_string()];
-        let (slice, warnings) = resolve_ir_slice(&ir, &inputs);
+        let (slice, warnings) = resolve_ir_slice(&ir, "m/plan/test", &inputs);
         assert!(warnings.is_empty());
         let ids: Vec<&str> = slice.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids, vec!["m/type/B", "m/type/A"]);
@@ -317,7 +324,7 @@ mod tests {
             vec![],
         );
         let inputs = vec!["m/type/DoesNotExist".to_string()];
-        let (slice, warnings) = resolve_ir_slice(&ir, &inputs);
+        let (slice, warnings) = resolve_ir_slice(&ir, "m/plan/test", &inputs);
         assert!(slice.is_empty());
         assert_eq!(warnings.len(), 1);
         assert_eq!(

@@ -617,6 +617,15 @@ fn cmd_synthesize(src: &str, file_path: &str, out_dir: &str, max_attempts: u32) 
         }
     }
 
+    // Never invoke the live model over a broken pipeline: parse,
+    // elaboration, or planning errors end the run here (phase-5 gate,
+    // finding 9) — spending model tokens on a spec that already failed
+    // deterministic stages helps no one.
+    if parse_errors || ir.has_errors() || plan_has_errors {
+        eprintln!("error: upstream errors present; skipping model synthesis");
+        std::process::exit(1);
+    }
+
     // The generative half: every generative plan node through the live
     // Claude subprocess, bounded repair per node.
     let mut provider = runner::ClaudeSubprocessProvider::new();

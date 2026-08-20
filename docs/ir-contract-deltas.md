@@ -67,3 +67,26 @@ These were bugs found in review and fixed to match what `verify.lisp` /
   `docs/surface-language.md`).
 - Arity checking for parameterized mode references (`Page (Task)` against
   `Page`'s declaration).
+
+## Runner deltas vs `src/runner.lisp` (phase 5)
+
+- Attempt records carry a `response-fingerprint` (FNV-1a of the raw,
+  lossily-UTF-8-decoded response text) in addition to the reference's
+  `response-length`; length is raw BYTES.
+- Repair packages recompute their prompt fingerprint over the repaired
+  text; the reference lets the original (stale) fingerprint ride along.
+  Provenance must identify the prompt actually sent.
+- Rejected-output truncation is byte-based, rounded DOWN to a UTF-8
+  boundary; the reference truncates by character count.
+- Every repair prompt is rebuilt from the ORIGINAL prompt package, never
+  from the previous repaired text; the reference chains repairs, which
+  compounds prompt size and accumulates re-embedded model output
+  (phase-5 gate, findings 1–2).
+- The rejected-output block is fenced with a nonce derived from its own
+  fingerprint and line-prefixed with `> `; diagnostic lines in repair
+  prompts truncate at 200 bytes and cap at 20 lines plus an elision
+  line. The reference embeds both channels unbounded and unframed.
+- The subprocess provider uses an argument-vector `Command` with stdin
+  prompt delivery; the reference's shell-string concatenation (an
+  injection hazard) is not ported. A failed/short stdin write is a
+  provider failure, never a silently truncated prompt.

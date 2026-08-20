@@ -631,7 +631,7 @@ pub fn compile_prompt(ir: &Ir, plan: &Plan, node: &PlanNode) -> PromptPackage {
     // whose shape is otherwise pinned byte-for-byte by the todo.gym
     // prompt goldens) — a caller that wants them calls
     // `prompt_ir_slice_warnings` directly; see that function's doc.
-    let (resolved, _warnings) = resolve_ir_slice(ir, &node.inputs);
+    let (resolved, _warnings) = resolve_ir_slice(ir, &node.id, &node.inputs);
     let ir_slice: Vec<IrNode> = resolved.into_iter().cloned().collect();
 
     let dependency_slice: Vec<(String, String)> = node
@@ -701,7 +701,7 @@ pub fn compile_prompts(ir: &Ir, plan: &Plan) -> Vec<PromptPackage> {
 /// always empty for it — the prompts/plan goldens are unaffected whether
 /// or not a caller chooses to call this.
 pub fn prompt_ir_slice_warnings(ir: &Ir, node: &PlanNode) -> Vec<Sexpr> {
-    resolve_ir_slice(ir, &node.inputs).1
+    resolve_ir_slice(ir, &node.id, &node.inputs).1
 }
 
 #[cfg(test)]
