@@ -379,11 +379,27 @@ fn oracle_07b_empty_list_prints_as_nil_and_reads_back_as_empty_list() {
 
 #[test]
 fn oracle_07c_unknown_escape_keeps_the_backslash() {
-    // The printer only ever escapes \" and \\; an escape sequence the
-    // printer would never produce (e.g. \n) must still be accepted by
-    // the reader for untrusted input, keeping the backslash literally.
-    let parsed = sexpr::parse("\"a\\nb\"").expect("parse must accept an unknown escape");
-    assert_eq!(parsed, Sexpr::Str("a\\nb".to_string()));
+    // INTEGRATOR RESOLUTION (live-synthesis finding, post-phase-8):
+    // this test originally pinned `\n` as an UNKNOWN escape (kept
+    // literally). Two live synthesis runs showed models write C-style
+    // \n inside file-content strings regardless of prompt instruction,
+    // corrupting emitted source under the literal rule — so the reader
+    // now interprets the three whitespace escapes \n, \t, \r. The
+    // printer still emits only real whitespace (escaping just `"` and
+    // `\`), so the canonical form, every golden, and the
+    // parse(print(x)) == x law are unchanged; the reader accepts both
+    // spellings on untrusted input. TRULY unknown escapes (e.g. \q)
+    // keep the original keep-the-backslash pin below.
+    let parsed = sexpr::parse("\"a\\nb\"").expect("parse must accept a whitespace escape");
+    assert_eq!(parsed, Sexpr::Str("a\nb".to_string()));
+    let tab = sexpr::parse("\"a\\tb\"").expect("parse must accept a tab escape");
+    assert_eq!(tab, Sexpr::Str("a\tb".to_string()));
+    let cr = sexpr::parse("\"a\\rb\"").expect("parse must accept a cr escape");
+    assert_eq!(cr, Sexpr::Str("a\rb".to_string()));
+    let unknown = sexpr::parse("\"a\\qb\"").expect("parse must accept an unknown escape");
+    assert_eq!(unknown, Sexpr::Str("a\\qb".to_string()));
+    // Both spellings normalize to the same canonical printed form.
+    assert_eq!(parsed.print(), "\"a\nb\"");
 }
 
 #[test]

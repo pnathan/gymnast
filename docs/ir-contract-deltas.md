@@ -471,3 +471,16 @@ contract:
   bi-ingest synthesis. The prompt now states that real newline
   characters are required and `\n` is not an escape. Model output is
   still never rewritten; the contract is stated, not patched over.
+- **The sexpr reader interprets `\n`, `\t`, `\r`** (live-synthesis
+  finding, post-phase-8): two live runs showed models write C-style
+  `\n` inside file-content strings regardless of prompt instruction,
+  which under the keep-the-backslash rule emitted one-line corrupted
+  source files. The reader now decodes the three whitespace escapes on
+  untrusted input; the PRINTER is unchanged (real whitespace, escaping
+  only `"` and `\`), so canonical forms, goldens, and the
+  parse(print(x)) round-trip law are untouched — both spellings
+  normalize to one canonical form. Truly unknown escapes still keep
+  the backslash. The `.gym` surface lexer deliberately keeps the old
+  rule (surface strings are ours; the reader is the model wire
+  contract). Frozen-oracle pin oracle_07c amended under integrator
+  arbitration with the reasoning in-file.

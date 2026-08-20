@@ -265,7 +265,24 @@ fn parse_string(bytes: &[u8], pos: &mut usize) -> Result<Sexpr, String> {
             match escaped {
                 b'"' => result.push(b'"'),
                 b'\\' => result.push(b'\\'),
-                // Unknown escape: keep the backslash, mirror the lexer.
+                // Whitespace escapes ARE interpreted (live-synthesis
+                // finding, 2 runs / 8 candidates: models write C-style
+                // \n inside file-content strings regardless of prompt
+                // instruction, which under keep-the-backslash produced
+                // one-line corrupted source files). The PRINTER never
+                // emits these — it prints real newlines/tabs and
+                // escapes only `"` and `\` — so the canonical form is
+                // unchanged, every golden is byte-identical, and
+                // parse(print(x)) == x still holds; the reader simply
+                // accepts both spellings on untrusted input. The .gym
+                // surface lexer keeps the old rule: surface strings
+                // are human-authored under OUR grammar, while this
+                // reader is the wire contract with models.
+                b'n' => result.push(b'\n'),
+                b't' => result.push(b'\t'),
+                b'r' => result.push(b'\r'),
+                // Any other unknown escape: keep the backslash, mirror
+                // the lexer.
                 _ => {
                     result.push(b'\\');
                     result.push(escaped);
