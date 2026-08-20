@@ -2,7 +2,6 @@
 
 (defspec gymnast-test-spec
   :version "test"
-  (use-profile test/profile "1")
   (application test-app :default-acceptance test)
   (actor user :kind person)
   (type UserId :opaque Text)
@@ -71,9 +70,9 @@
   (assert-true (> (length (gymnast-surface-children gymnast-test-spec)) 10)))
 
 (deftest trusted-macro-lowers-to-kernel-form
-  (let ((first-child (car (gymnast-surface-children gymnast-test-spec))))
-    (assert-equal (gymnast-surface-kind first-child) 'import)
-    (assert-equal (gymnast-surface-mechanism first-child) 'fexpr)))
+  (let ((lowered (use-profile some-profile "1.0")))
+    (assert-equal (gymnast-surface-kind lowered) 'import)
+    (assert-equal (gymnast-surface-mechanism lowered) 'fexpr)))
 
 (deftest elaboration-is-closed-and-valid
   (let ((ir (gymnast-elaborate gymnast-test-spec)))
@@ -243,6 +242,142 @@
     (assert-false (gymnast-has-errors-p (gymnast-ir-field ir 'diagnostics)))
     (assert-true (gymnast-find-ir-node ir
         "defaults-test/constraint/profile-constraint"))))
+
+(deftest unknown-profile-is-error
+  (let* ((surface
+        (module unknown-test
+          (use-profile nonexistent-profile "1.0")
+          (actor user :kind person)
+          (type Id :opaque Text)
+          (component app :responsibility "test" :provides (api))
+          (interface api
+            (command do :actor user :input Id :output Id
+              :errors (forbidden)))
+          (state items :of (List Id) :owner app :durability durable)
+          (flow f :from user :to api :kind command :grant (auth))
+          (behavior do :on (api/do user item)
+            :reads (items) :writes (items) :atomic items
+            (requires (ok? user)) (ensures (ok? post)))
+          (synthesis s :target (lamedh :track "0.5")
+            :model (small-code-model :class nano :temperature 0))
+          (acceptance t :subject app
+            (property p :generate ((x g))
+              :execute (do x) :must (ok? result)))))
+      (ir (gymnast-elaborate surface))
+      (diagnostics (gymnast-ir-field ir 'diagnostics)))
+    (assert-true (gymnast-has-errors-p diagnostics))
+    (assert-true (gymnast-any
+        (lambda (d)
+          (equal (gymnast-diagnostic-field d 'code) 'unknown-profile))
+        diagnostics))))
+
+;;; Port declaration tests.
+
+(defspec port-test-spec
+  :version "test"
+  (actor user :kind person)
+  (type UserId :opaque Text)
+  (type ChargeId :opaque Text)
+  (type Charge :record ((id ChargeId) (amount Integer) (currency Text)))
+  (type User :record ((id UserId) (name Text)))
+  (component app :responsibility "Payment service" :provides (api))
+  (interface api
+    (command create-charge :actor user :input Charge :output Charge
+      :errors (forbidden)))
+  (port payment-api
+    :direction provides
+    :protocol rest
+    :content-type json
+    (operation create-charge :method POST :path "/charges")
+    (operation get-charge :method GET :path "/charges/:id"))
+  (port user-service
+    :direction requires
+    :protocol grpc
+    :content-type protobuf
+    (operation get-user :returns User)
+    (operation list-users :returns (List User)))
+  (state charges :of (List Charge) :owner app :durability durable)
+  (flow access :from user :to api :kind command :grant (authenticated))
+  (behavior create-charge
+    :on (api/create-charge user charge)
+    :reads (charges) :writes (charges) :atomic charges
+    (requires (authenticated? user))
+    (ensures (contains? post charge)))
+  (constraint load :class workload :must (supports 100 concurrent-users))
+  (synthesis test
+    :target (lamedh :track "0.5")
+    :model (small-code-model :class nano :temperature 0))
+  (acceptance test :subject app
+    (property round-trip
+      :generate ((charge valid-charge))
+      :execute (create-charge charge) :must (ok? result))))
+
+(deftest port-elaborates-into-design-graph
+  (let* ((ir (gymnast-elaborate port-test-spec))
+      (ports (gymnast-ir-nodes-of-kind ir 'port)))
+    (assert-false (gymnast-has-errors-p (gymnast-ir-field ir 'diagnostics)))
+    (assert-equal (length ports) 2)
+    (assert-true (gymnast-find-ir-node ir
+        "port-test-spec/port/payment-api"))
+    (assert-true (gymnast-find-ir-node ir
+        "port-test-spec/port/user-service"))))
+
+(deftest port-direction-and-protocol-are-required
+  (let* ((surface
+        (module port-missing
+          (port bad-port :protocol rest)))
+      (ir (gymnast-elaborate surface)))
+    (assert-true (gymnast-has-errors-p (gymnast-ir-field ir 'diagnostics)))))
+
+(deftest port-carries-protocol-and-direction
+  (let* ((ir (gymnast-elaborate port-test-spec))
+      (node (gymnast-find-ir-node ir "port-test-spec/port/payment-api"))
+      (fields (gymnast-ir-node-field node 'fields)))
+    (assert-equal (gymnast-assoc-value ':direction fields) 'provides)
+    (assert-equal (gymnast-assoc-value ':protocol fields) 'rest)
+    (assert-equal (gymnast-assoc-value ':content-type fields) 'json)))
+
+(deftest port-operations-captured-as-clauses
+  (let* ((ir (gymnast-elaborate port-test-spec))
+      (node (gymnast-find-ir-node ir "port-test-spec/port/payment-api"))
+      (clauses (gymnast-ir-node-field node 'clauses)))
+    (assert-equal (length clauses) 2)
+    (assert-equal (car (car clauses)) 'operation)))
+
+(deftest port-nodes-flow-into-plan
+  (let* ((ir (gymnast-elaborate port-test-spec))
+      (plan (gymnast-plan ir))
+      (interface-node (gymnast-find-plan-node plan
+          (gymnast-plan-id ir "interface-contracts")))
+      (handler-node (gymnast-find-plan-node plan
+          (gymnast-plan-id ir "service-handlers")))
+      (port-id "port-test-spec/port/payment-api"))
+    (assert-true (member port-id
+        (gymnast-plan-node-field interface-node 'inputs)))
+    (assert-true (member port-id
+        (gymnast-plan-node-field handler-node 'inputs)))))
+
+(deftest port-projected-into-prompts
+  (let* ((ir (gymnast-elaborate port-test-spec))
+      (plan (gymnast-plan ir))
+      (prompts (gymnast-compile-prompts ir plan))
+      (interface-prompt (car
+          (filter
+            (lambda (p)
+              (gymnast-string-contains
+                (gymnast-assoc-value 'node-id (cdr p))
+                "interface-contracts"))
+            prompts)))
+      (text (gymnast-assoc-value 'text (cdr interface-prompt))))
+    (assert-true (gymnast-string-contains text "PORT BOUNDARIES"))
+    (assert-true (gymnast-string-contains text "payment-api"))))
+
+(deftest port-spec-compiles-reproducibly
+  (let ((a (gymnast-compile port-test-spec))
+      (b (gymnast-compile port-test-spec)))
+    (assert-equal
+      (gymnast-compilation-field a 'fingerprint)
+      (gymnast-compilation-field b 'fingerprint))))
 
 ;;; Canonical serialization contract tests.
 

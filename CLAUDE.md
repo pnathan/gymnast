@@ -56,7 +56,7 @@ scripts/benchmark.sh
 src/
   gymnast.lisp       load unit; includes all 16 modules, defines gymnast-compile
   core.lisp          data constructors, helpers, FNV-1a fingerprinting, IR/plan node types
-  surface.lisp       fexprs, vau, defspec macro, use-profile macro
+  surface.lisp       fexprs, vau, defspec macro, use-profile macro, port declaration
   profile.lisp       versioned semantic profiles: registration, resolution, parameterization
   elaborate.lisp     surface-to-IR elaboration with closed-world diagnostics
   plan.lisp          deterministic lowering from IR to 8-node typed synthesis DAG
@@ -73,7 +73,7 @@ src/
   serialize.lisp     canonical serialization contract and trust-boundary validation
   cli.lisp           CLI entrypoint: check, ir, plan, prompts, compile subcommands
 tests/
-  compiler.lisp      103 tests: front-half pipeline, platform, transitions, verification, multi-target
+  compiler.lisp      111 tests: front-half pipeline, platform, transitions, verification, ports, multi-target
   core-types.lisp    48 tests: core data constructors and helpers
   transition-types.lisp  4 tests: transition record types
   recipe-types.lisp  4 tests: recipe record types
@@ -215,11 +215,13 @@ cargo run -- synthesize ../examples/todo.gym /tmp/out 3  # LIVE model; never in 
   post-transition states.
 - Cache keys are derived from node contract fingerprint, IR-slice fingerprint,
   and dependency fingerprints for reproducible invalidation.
+- Port declarations characterize external boundaries (provides/requires) without
+  importing foreign closed worlds; interop is by contract, not by inclusion.
 
 ## Issue roadmap (dependency order)
 
 Issues #1–#10 are closed; #17 is addressed by this document's
-current revision. Issues #12 and #23 remain open.
+current revision. Issues #12, #23, and #37 remain open.
 
 | # | Title | Status |
 |---|-------|--------|
@@ -236,22 +238,30 @@ current revision. Issues #12 and #23 remain open.
 | 12 | North star architecture document | Open |
 | 17 | Update CLAUDE.md to match current codebase | Addressed |
 | 23 | Benchmark for merges | Open |
+| 36 | Unknown profile imports → hard error | Closed |
+| 37 | Fixed 8-node plan template regardless of spec complexity | Open |
+| 38 | Component port declarations for external boundaries | Closed |
 
 ## What is built
 
 TWO implementations of the complete compiler pipeline:
 
-**Lamedh (reference)**: surface through assembly, with 178 tests across
-7 test files and 10 example specifications.
+**Lamedh (reference)**: surface through assembly, with 192 tests across
+7 test files and 10 example specifications, including component port
+declarations for external boundaries (issue #38).
 
-**Rust (`rust/`, at full parity plus deliberate hardening deltas)**:
-675+ tests across 31 binaries, eight byte-stable goldens
+**Rust (`rust/`, at full parity with the pre-port-declaration
+reference, plus deliberate hardening deltas)**: 675+ tests across 31
+binaries, eight byte-stable goldens
 (ir/plan/prompts/verify/results/bundle/adequacy + reproducible compile
 trees), all CI-diffed. Verification is tri-state-honest (no vacuous
 passes, no fabricated failures), promotion is fail-closed, the
 adequacy campaign is subject-bound and reports the verifier’s real
 blind spots (todo.gym today: all five standard mutants survive —
-`pass nil` — because must-assertions are not yet evaluated).
+`pass nil` — because must-assertions are not yet evaluated). Lamedh’s
+new port declarations (#38) are not yet ported — they align with the
+interop direction of `docs/shared-domains-design.md` and belong to
+that phase.
 
 The Lamedh reference provides:
 
@@ -259,7 +269,9 @@ The Lamedh reference provides:
 - Closed-world elaboration with semantic IDs and fingerprinting
 - Deterministic 8-node synthesis planning with coverage checks
 - Prompt compilation with structured projections (capabilities, state model,
-  type reference, behavioral reference)
+  type reference, port boundaries, behavioral reference)
+- Component port declarations for external interface boundaries
+  (REST, gRPC, GraphQL, message queues — provides/requires contracts)
 - Candidate validation firewall
 - Executable transition calculus with bounded trace execution
 - Characterized Ruby platform kit with adapters and test doubles
