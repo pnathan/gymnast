@@ -948,13 +948,22 @@ fn oracle_07a_campaign_summary_counts_and_field_order() {
     assert_eq!(items[0].as_sym(), Some("campaign-result"));
     assert_eq!(items.len(), 2, "nested house convention: tag + one pack");
     let fields = items[1].as_list().expect("nested field list");
+    // INTEGRATOR RESOLUTION (phase-9 gate, finding 1): the campaign
+    // result is now BOUND to its subject (module + ir-fingerprint) and
+    // carries an `inapplicable` count — without these, the todo
+    // campaign was byte-identical, fingerprint included, over ANY spec
+    // (five fabricated blind spots about mutations that never applied).
+    // Field order gains `subject` after schema and `inapplicable` after
+    // survived; mutant-result forms gain `applied` after critical.
     assert_eq!(
         pair_keys(fields),
         vec![
             "schema",
+            "subject",
             "total",
             "killed",
             "survived",
+            "inapplicable",
             "degraded-only",
             "critical-survived",
             "pass",
@@ -999,6 +1008,7 @@ fn oracle_07a_campaign_summary_counts_and_field_order() {
                 "mutant-id",
                 "class",
                 "critical",
+                "applied",
                 "killed",
                 "detecting-obligations",
                 "degraded-obligations",

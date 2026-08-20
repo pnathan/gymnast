@@ -84,6 +84,12 @@ jobs:
           cargo run -- adequacy ../examples/todo.gym > /tmp/adequacy-two.sexpr
           diff /tmp/adequacy-one.sexpr /tmp/adequacy-two.sexpr
           diff /tmp/adequacy-one.sexpr tests/fixtures/todo-adequacy.sexpr
+      - name: Adequacy exits 1 on a known-bad spec
+        run: |
+          printf 'spec t = v 0.1 owner o exports A\n\nmode A = opaque text\ninv a = on s always p\ninv a = on s always q\n' > /tmp/bad-adequacy.gym
+          if cargo run -- adequacy /tmp/bad-adequacy.gym; then
+            echo "adequacy must exit nonzero on a broken spec" && exit 1
+          fi
       - name: Verify exits 1 on a known-bad spec
         run: |
           printf 'spec t = v 0.1 owner o exports A\n\nmode A = opaque text\ninv a = on s always p\ninv a = on s always q\n' > /tmp/bad-verify.gym

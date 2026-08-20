@@ -543,3 +543,39 @@ the reference, pinned by `adequacy_oracle_test.rs`:
 - Concurrency and fault scaffolding (`boundary_interleaving`,
   `standard_fault_scenarios`) are DATA descriptions only, reference
   parity — the campaign executes mutants, never scenarios.
+
+## Phase-9 gate fixes (campaign honesty)
+
+All deliberate, pinned by `gate9_regression_test.rs`; the frozen
+oracle's shape pins were amended under integrator arbitration with
+in-file notes:
+
+- **Subject binding** (finding 1, the blocker): `campaign-result`
+  gains `(subject ((module "...") (ir-fingerprint "fnv1a64:...")))`
+  after `schema` — without it, the todo campaign was byte-identical
+  (fingerprint included) over ANY spec, so the committed golden could
+  impersonate the adequacy evidence for anything.
+- **Inapplicability honesty** (finding 1): a mutant whose mutation
+  leaves the IR unchanged (missing target) is INAPPLICABLE — reported
+  with `(applied nil)` in its `mutant-result`, counted in a new
+  campaign `(inapplicable N)` field, and never a survivor, never a
+  blind spot. `pass` now means: every CRITICAL mutant was applied AND
+  killed — an inapplicable critical mutant blocks pass (the campaign
+  could not test that defect class), while the empty mutant list stays
+  vacuously true (reference parity).
+- **`adequacy` refuses an unsound baseline** (finding 2): a spec whose
+  verification bundle carries error-severity diagnostics (E601
+  duplicate-obligation-id makes the first-match baseline lookup mask
+  genuine kills) exits 1 with the errors on stderr and NO campaign
+  emitted — matching the `verify` contract; CI gains the paired
+  known-bad-spec gate.
+- **Removal-class visibility** (finding 6, documented limitation): a
+  `RemoveInvariant` mutation deletes its own obligation, so the
+  campaign loses a working check while `degraded-obligations` stays
+  empty — removal is invisible to the degradation channel BY
+  CONSTRUCTION (the mutated run has no entry to compare). A
+  `removed-obligations` channel is future work.
+- **Notes made explicit** (finding 8): an obligation that is
+  `indeterminate` post-mutation with NO baseline entry at all counts
+  as degraded; the reference's `mutator` closure field is replaced by
+  the closed `Mutation` enum (no callable values in campaign data).

@@ -88,6 +88,12 @@ pub struct MutantResult {
     pub mutant_id: String,
     pub class: String,
     pub critical: bool,
+    /// `true` iff the mutation actually CHANGED the IR (phase-9 gate,
+    /// finding 1): a mutant whose target is absent from this spec is
+    /// an identity mutation — re-verifying the unchanged IR yields no
+    /// evidence about the verifier, so an inapplicable mutant is never
+    /// a kill, never a survivor, and never a blind spot.
+    pub applied: bool,
     pub killed: bool,
     /// NEW failures only: obligation ids `failed` after mutation that
     /// were not `failed` in the baseline.
@@ -415,6 +421,23 @@ fn baseline_status<'a>(baseline: &'a [Sexpr], id: &str) -> Option<&'a str> {
 /// follows the mutated run's lowering order (deterministic).
 pub fn run_mutant(ir: &Ir, baseline: &[Sexpr], mutant: &Mutant) -> MutantResult {
     let mutated = apply_mutation(ir, &mutant.mutation);
+    // Identity mutation (missing target): no defect was seeded, so
+    // there is nothing to detect — report inapplicability honestly
+    // instead of fabricating a "survived" verdict (phase-9 gate,
+    // finding 1: the todo mutant set over a foreign spec produced five
+    // fabricated blind spots about mutations that never happened).
+    if mutated == *ir {
+        return MutantResult {
+            mutant_id: mutant.id.clone(),
+            class: mutant.class.clone(),
+            critical: mutant.critical,
+            applied: false,
+            killed: false,
+            detecting_obligations: vec![],
+            degraded_obligations: vec![],
+            description: mutant.description.clone(),
+        };
+    }
     let obligations = lower_all_obligations(&mutated);
     let results: Vec<Sexpr> = obligations
         .iter()
@@ -443,6 +466,7 @@ pub fn run_mutant(ir: &Ir, baseline: &[Sexpr], mutant: &Mutant) -> MutantResult 
         mutant_id: mutant.id.clone(),
         class: mutant.class.clone(),
         critical: mutant.critical,
+        applied: true,
         killed: !detecting.is_empty(),
         detecting_obligations: detecting,
         degraded_obligations: degraded,
@@ -468,6 +492,7 @@ fn mutant_result_to_sexpr(result: &MutantResult) -> Sexpr {
         Sexpr::pair("mutant-id", Sexpr::Str(result.mutant_id.clone())),
         Sexpr::pair("class", Sexpr::sym(&result.class)),
         Sexpr::pair("critical", bool_sexpr(result.critical)),
+        Sexpr::pair("applied", bool_sexpr(result.applied)),
         Sexpr::pair("killed", bool_sexpr(result.killed)),
         Sexpr::pair(
             "detecting-obligations",
@@ -507,10 +532,15 @@ fn blind_spot_to_sexpr(result: &MutantResult) -> Sexpr {
 /// mutant via `run_mutant`. The `campaign-result` root uses the NESTED
 /// house convention with the fingerprint computed over the
 /// fingerprint-free form and appended last — the same discipline as
-/// every fingerprinted artifact since phase 7. `pass` iff no critical
-/// mutant survived (so an empty mutant list passes vacuously);
-/// `degraded-only` counts mutants with no new failure but at least one
-/// degradation.
+/// every fingerprinted artifact since phase 7. The result is BOUND to
+/// its subject (module + IR fingerprint). `pass` iff every critical
+/// mutant was applied AND killed (an empty mutant list passes
+/// vacuously; an inapplicable critical mutant blocks pass — the
+/// campaign could not test that defect class); `degraded-only` counts
+/// applied, unkilled mutants with at least one degradation;
+/// `inapplicable` counts identity mutations (missing targets), which
+/// are never survivors and never blind spots (phase-9 gate, finding
+/// 1).
 pub fn run_campaign(ir: &Ir, mutants: &[Mutant]) -> Sexpr {
     let obligations = lower_all_obligations(ir);
     let baseline: Vec<Sexpr> = obligations
@@ -524,20 +554,44 @@ pub fn run_campaign(ir: &Ir, mutants: &[Mutant]) -> Sexpr {
         .collect();
 
     let killed = results.iter().filter(|r| r.killed).count();
-    let survived: Vec<&MutantResult> = results.iter().filter(|r| !r.killed).collect();
+    // A SURVIVOR is a mutant that was APPLIED and not killed; an
+    // inapplicable mutant was never tested and is counted separately
+    // (phase-9 gate, finding 1).
+    let survived: Vec<&MutantResult> = results.iter().filter(|r| r.applied && !r.killed).collect();
+    let inapplicable = results.iter().filter(|r| !r.applied).count();
     let degraded_only = results
         .iter()
-        .filter(|r| !r.killed && !r.degraded_obligations.is_empty())
+        .filter(|r| r.applied && !r.killed && !r.degraded_obligations.is_empty())
         .count();
     let critical_survived: Vec<&MutantResult> =
         survived.iter().copied().filter(|r| r.critical).collect();
-    let pass = critical_survived.is_empty();
+    // `pass` means: every CRITICAL mutant was applied AND killed. A
+    // critical mutant that survived is a blind spot; a critical mutant
+    // that never applied means the campaign could not test that defect
+    // class against this spec — neither is a pass (the empty mutant
+    // list stays vacuously true, reference parity). Fabricated
+    // pass-by-inapplicability was the phase-9 gate's blocker.
+    let pass = results
+        .iter()
+        .all(|r| !r.critical || (r.applied && r.killed));
 
     let mut fields = vec![
         Sexpr::pair("schema", Sexpr::Str(ADEQUACY_SCHEMA.to_string())),
+        // The campaign is BOUND to its subject (phase-9 gate, finding
+        // 1): without this, the todo campaign result was byte-identical
+        // — fingerprint included — over any spec, so the committed
+        // golden could impersonate the adequacy evidence for anything.
+        Sexpr::pair(
+            "subject",
+            Sexpr::list(vec![
+                Sexpr::pair("module", Sexpr::Str(ir.module_name.clone())),
+                Sexpr::pair("ir-fingerprint", Sexpr::Str(ir.fingerprint.clone())),
+            ]),
+        ),
         Sexpr::pair("total", Sexpr::Int(mutants.len() as i64)),
         Sexpr::pair("killed", Sexpr::Int(killed as i64)),
         Sexpr::pair("survived", Sexpr::Int(survived.len() as i64)),
+        Sexpr::pair("inapplicable", Sexpr::Int(inapplicable as i64)),
         Sexpr::pair("degraded-only", Sexpr::Int(degraded_only as i64)),
         Sexpr::pair(
             "critical-survived",

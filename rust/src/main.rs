@@ -266,6 +266,23 @@ fn cmd_adequacy(src: &str, file_path: &str, _file_name: &str) {
         eprint!("{}", diag::render(later_diags, src, file_path));
     }
 
+    // Phase-9 gate, finding 2: a spec whose verification bundle carries
+    // error-severity diagnostics (e.g. E601 duplicate-obligation-id) has
+    // an UNSOUND baseline — duplicate ids make the first-match baseline
+    // lookup mask genuine kills. `verify` refuses such specs visibly
+    // (phase-7 gate, finding 8); `adequacy` must not silently accept
+    // what `verify` rejects, and a campaign over an unsound baseline is
+    // fabricated evidence — refuse before running it.
+    let bundle = verify::compile_verification(&ir);
+    let bundle_errors = verify::bundle_error_diagnostics(&bundle);
+    if !bundle_errors.is_empty() {
+        for msg in &bundle_errors {
+            eprintln!("error: {}", msg);
+        }
+        eprintln!("error: verification bundle has errors; adequacy baseline would be unsound");
+        std::process::exit(1);
+    }
+
     let campaign = adequacy::run_campaign(&ir, &adequacy::standard_todo_mutants());
     print!("{}", sexpr::canonical_serialize(&campaign));
 
