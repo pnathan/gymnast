@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+use gymnast_rs::assembly;
 use gymnast_rs::candidate::{is_unsafe_output_path, Candidate};
 use gymnast_rs::diag::{self, Severity};
 use gymnast_rs::elaborate;
@@ -460,6 +461,7 @@ fn cmd_compile(src: &str, file_path: &str, out_dir: &str) {
         "results.sexpr",
         &sexpr::canonical_serialize(&results_wrapper),
     );
+    write_evidence_bundle(out_path, &ir, &p, &results);
 
     // A failed deterministic recipe is a failed compilation: render its
     // diagnostics like plan diagnostics and fold them into the exit code
@@ -637,6 +639,7 @@ fn cmd_synthesize(src: &str, file_path: &str, out_dir: &str, max_attempts: u32) 
         "results.sexpr",
         &sexpr::canonical_serialize(&results_wrapper),
     );
+    write_evidence_bundle(out_path, &ir, &p, &results);
 
     let mut execution_errors = false;
     for result in &results {
@@ -713,6 +716,40 @@ fn cmd_synthesize(src: &str, file_path: &str, out_dir: &str, max_attempts: u32) 
         } else {
             0
         },
+    );
+}
+
+/// Assembles the promotion evidence bundle over the deterministic
+/// execution results and the (deterministic) verification bundle, and
+/// writes it as `evidence-bundle.sexpr` (phase-8 plan, section C):
+/// one canonically printed two-element form,
+/// `(assembly ((bundle <evidence-bundle>) (promotion <promotion-result>)))`,
+/// trailing newline, byte-stable across compiles. Shared by
+/// `cmd_compile` and `cmd_synthesize` so the two can never disagree
+/// about the artifact's shape. A `hold` decision is evidence, not a
+/// gate: it never affects the exit code — `compile` already fails on
+/// failed recipes, and promotion is a judgment over the bundle, not a
+/// stage of compilation.
+fn write_evidence_bundle(
+    out_path: &Path,
+    ir: &gymnast_rs::ir::Ir,
+    p: &plan::Plan,
+    results: &[recipe::ExecutionResult],
+) {
+    let verification = verify::compile_verification(ir);
+    let bundle = assembly::assemble_bundle(ir, p, results, Some(&verification));
+    let promotion = assembly::evaluate_promotion(&assembly::default_promotion_policy(), &bundle);
+    let wrapper = Sexpr::list(vec![
+        Sexpr::sym("assembly"),
+        Sexpr::list(vec![
+            Sexpr::pair("bundle", bundle),
+            Sexpr::pair("promotion", promotion),
+        ]),
+    ]);
+    write_artifact(
+        out_path,
+        "evidence-bundle.sexpr",
+        &sexpr::canonical_serialize(&wrapper),
     );
 }
 

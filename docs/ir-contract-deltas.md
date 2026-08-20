@@ -346,3 +346,56 @@ pinned by `gate7_regression_test.rs`:
   in `cache.rs`'s module contract — any future wiring MUST re-run the
   candidate firewall on every hit; the key covers the node contract,
   not the candidate's conformance to it.
+
+## Assembly and promotion shapes (phase 8)
+
+`assembly.rs` ports `src/assembly.lisp`'s behavioral intent
+(`docs/rust-port-plan-phase8.md`, sections A-B). Deliberate deltas from
+the reference, pinned by `assembly_oracle_test.rs`:
+
+- **The evidence bundle carries a trailing `(fingerprint "fnv1a64:...")`
+  field** computed over the fingerprint-free form via a private
+  `assemble_bundle_without_fingerprint` — the phase-7 verification-bundle
+  pattern verbatim. The reference bundle has no fingerprint.
+- **`evaluate_promotion` computes a FIFTH check,
+  `no-indeterminate-verification`**: no verification section, OR the
+  verification summary's `indeterminate == 0`. Phase 7 made undecidable
+  verdicts honest; promotion must not launder a fully-indeterminate
+  verification into `promote`. The reference computes four checks. All
+  checks are fail-closed: a missing or malformed bundle field evaluates
+  its check to `nil` (an ABSENT or `nil` verification section is the one
+  vacuous case — both verification checks hold, exactly as the
+  reference's `(or (not verification) ...)` reads); a PRESENT
+  verification section whose summary cannot be read fails both.
+- **The reference's `passed` status arm is dead here**: the Rust
+  `ExecutionStatus` enum has no `passed` variant, so `succeeded-nodes`
+  counts only `succeeded`. `deferred` counts toward neither tally —
+  Lamedh parity, so a deferred node does NOT block the
+  `all-nodes-succeeded` promotion check (documented, deliberate).
+- **Assembly diagnostics use the nested house shape**
+  `(diagnostic ((severity s) (code c) (subject "...") (message "...")))`
+  with severity/code as bare symbols — unlike `diag::diag_sexpr`'s flat
+  span-carrying shape (assembly diagnostics have no source span). The
+  reference's trailing `details` field, which duplicates `subject` at
+  every call site, is not carried.
+- `has_evidence` on a traceability entry is STATUS-BLIND (reference
+  parity): any execution result whose node-id is in the entry's
+  plan-nodes counts, deferred included.
+- `Artifact.size` is content length in BYTES (the reference's `length`
+  counts characters); the digest is `fingerprint_string` over the file
+  CONTENT string alone, never the `(path content)` pair.
+- `collect_artifacts` is total where the reference's `car`/`cadr` would
+  error: a malformed candidate form, a missing/empty `files`, or an
+  individual `files` entry that is not a `(string string)` pair
+  contributes nothing — never a diagnostic (the firewall already ruled
+  on candidates; assembly only collects).
+- **CLI artifact (new; the reference has no assembly CLI stage)**:
+  `compile` and `synthesize` write `evidence-bundle.sexpr` after
+  `results.sexpr` — one canonically printed two-element form,
+  `(assembly ((bundle <evidence-bundle>) (promotion <promotion-result>)))`,
+  with a trailing newline, assembled over the deterministic execution
+  results and `compile_verification`'s bundle, judged by the default
+  policy. Byte-stable across compiles; pinned byte-for-byte by
+  `tests/fixtures/todo-bundle.sexpr` and CI's reproducible-compilation
+  diff. A `hold` decision never changes the exit code: promotion is
+  evidence, not a gate on compilation.

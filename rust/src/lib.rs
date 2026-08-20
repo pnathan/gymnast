@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod assembly;
 pub mod ast;
 pub mod cache;
 pub mod candidate;
