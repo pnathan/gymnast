@@ -484,3 +484,62 @@ contract:
   rule (surface strings are ours; the reader is the model wire
   contract). Frozen-oracle pin oracle_07c amended under integrator
   arbitration with the reasoning in-file.
+
+## Adequacy campaign shapes (phase 9)
+
+`adequacy.rs` ports `src/adequacy.lisp`'s behavioral intent
+(`docs/rust-port-plan-phase9.md`, sections A-E). Deliberate deltas from
+the reference, pinned by `adequacy_oracle_test.rs`:
+
+- **Baseline-aware detection (the one deliberate SEMANTIC delta)**: the
+  reference counts a mutant killed when ANY obligation is `failed`
+  after mutation. Against `todo.gym` that is vacuous — the baseline
+  already has two `failed` obligations (`create_then_read`,
+  `sharing_boundary`), so every mutant, including the identity
+  mutation, would count as killed. Here `run_campaign` runs
+  verification over the BASELINE IR once, then over each mutated IR; a
+  mutant is **killed** iff some obligation is `failed` in the mutated
+  results AND was not `failed` in the baseline (a NEW failure,
+  including an obligation id that only exists post-mutation).
+  `detecting-obligations` lists only the NEW failures' ids.
+  Consequence, pinned in the oracle and the committed fixture: all
+  five standard todo.gym mutants SURVIVE — the campaign result is
+  `(pass nil)` with five blind spots — where the reference's rule
+  would have laundered the same facts into `pass t`. That is the
+  honest state of the verifier today (property/scenario `must`
+  assertions are still unevaluated, recorded since phase 6).
+- **Degraded status (new field, no reference counterpart)**: an
+  obligation whose status moved to `indeterminate` from anything else
+  is reported in the mutant-result's `degraded-obligations` — a
+  visibility loss, never a detection (an undecidable verdict detects
+  nothing), so it never kills a mutant. The campaign summary's
+  `degraded-only` counts mutants with no new failure but at least one
+  degradation.
+- **Campaign fingerprint**: the `campaign-result` root uses the nested
+  house convention with a trailing `(fingerprint "fnv1a64:...")`
+  computed over the fingerprint-free form — the phase-7/8 artifact
+  discipline verbatim. The reference result carries no fingerprint.
+  `mutant-result`, `blind-spot`, `interleaving-scenario`, and
+  `fault-scenario` forms stay FLAT (the phase-6 record-projection
+  convention split).
+- **Mutated IRs are never serialized**: `apply_mutation` is pure
+  clone-and-edit IR surgery and does NOT re-fingerprint — the mutated
+  value still carries the ORIGINAL `Ir.fingerprint`. A mutated IR is a
+  transient verification input consumed by `run_mutant` and dropped;
+  it never reaches `canonical_serialize`, a cache key, or any on-disk
+  artifact, so a stale fingerprint can never be mistaken for a real
+  one. Targeting is by node NAME within kind, first match only
+  (reference `car`/`filter` parity); a missing target returns the IR
+  unchanged — total, never a panic.
+- **CLI `adequacy` subcommand (new; the reference has no adequacy CLI
+  stage)**: `adequacy FILE.gym` runs the standard five-mutant campaign
+  over the elaborated IR; stdout is the canonical serialization of
+  `(campaign-result ...)`, stderr diagnostics as in `verify`, exit 1
+  on parse/IR errors ONLY. A failing campaign (`pass nil`) is
+  evidence data, exit 0 — the same rationale as `hold` in the phase-8
+  evidence bundle. Pinned byte-for-byte by
+  `tests/fixtures/todo-adequacy.sexpr` and CI's reproducible-adequacy
+  double-run diff.
+- Concurrency and fault scaffolding (`boundary_interleaving`,
+  `standard_fault_scenarios`) are DATA descriptions only, reference
+  parity — the campaign executes mutants, never scenarios.

@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+use gymnast_rs::adequacy;
 use gymnast_rs::assembly;
 use gymnast_rs::candidate::{is_unsafe_output_path, Candidate};
 use gymnast_rs::diag::{self, Severity};
@@ -14,7 +15,7 @@ use gymnast_rs::runner;
 use gymnast_rs::sexpr::{self, Sexpr};
 use gymnast_rs::verify;
 
-const USAGE: &str = "usage: gymnast-rs <parse|check|ir|plan|prompts|verify> FILE.gym\n       gymnast-rs compile FILE.gym OUT_DIR\n       gymnast-rs synthesize FILE.gym OUT_DIR [MAX_ATTEMPTS]";
+const USAGE: &str = "usage: gymnast-rs <parse|check|ir|plan|prompts|verify|adequacy> FILE.gym\n       gymnast-rs compile FILE.gym OUT_DIR\n       gymnast-rs synthesize FILE.gym OUT_DIR [MAX_ATTEMPTS]";
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -88,6 +89,7 @@ fn main() {
         "plan" => cmd_plan(&src, file_path, file_name),
         "prompts" => cmd_prompts(&src, file_path, file_name),
         "verify" => cmd_verify(&src, file_path, file_name),
+        "adequacy" => cmd_adequacy(&src, file_path, file_name),
         _ => {
             eprintln!("{}", USAGE);
             std::process::exit(2);
@@ -234,6 +236,44 @@ fn cmd_verify(src: &str, file_path: &str, _file_name: &str) {
             0
         },
     );
+}
+
+/// Handle the `adequacy` subcommand: parse, elaborate, run the standard
+/// mutation campaign over the elaborated IR; stdout is the canonical
+/// serialization of `(campaign-result ...)`. Same arity/diagnostic
+/// contract as `verify` (plan-phase9 section E); exit reflects parse/IR
+/// errors ONLY. A failing campaign (`pass nil` — critical mutants
+/// survived) is evidence data carried inside the result, not a process
+/// error — the same rationale as `hold` in the phase-8 evidence bundle.
+/// The reference has no adequacy subcommand; this is a documented delta
+/// (`docs/ir-contract-deltas.md`).
+fn cmd_adequacy(src: &str, file_path: &str, _file_name: &str) {
+    let (ast, parse_diags) = parser::parse(src);
+
+    if !parse_diags.is_empty() {
+        eprint!("{}", diag::render(&parse_diags, src, file_path));
+    }
+    let parse_errors = parse_diags.iter().any(|d| d.severity == Severity::Error);
+
+    let file = match ast {
+        Some(file) => file,
+        None => std::process::exit(1),
+    };
+
+    let (ir, all_diags) = elaborate::elaborate_with_parse_diags(&file, &parse_diags);
+    let later_diags = &all_diags[parse_diags.len()..];
+    if !later_diags.is_empty() {
+        eprint!("{}", diag::render(later_diags, src, file_path));
+    }
+
+    let campaign = adequacy::run_campaign(&ir, &adequacy::standard_todo_mutants());
+    print!("{}", sexpr::canonical_serialize(&campaign));
+
+    std::process::exit(if parse_errors || ir.has_errors() {
+        1
+    } else {
+        0
+    });
 }
 
 /// Handle the `plan` subcommand: parse, elaborate, plan; stdout is the

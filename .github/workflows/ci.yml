@@ -78,6 +78,12 @@ jobs:
           cargo run -- verify ../examples/todo.gym > /tmp/verify-two.sexpr
           diff /tmp/verify-one.sexpr /tmp/verify-two.sexpr
           diff /tmp/verify-one.sexpr tests/fixtures/todo-verify.sexpr
+      - name: Reproducible adequacy
+        run: |
+          cargo run -- adequacy ../examples/todo.gym > /tmp/adequacy-one.sexpr
+          cargo run -- adequacy ../examples/todo.gym > /tmp/adequacy-two.sexpr
+          diff /tmp/adequacy-one.sexpr /tmp/adequacy-two.sexpr
+          diff /tmp/adequacy-one.sexpr tests/fixtures/todo-adequacy.sexpr
       - name: Verify exits 1 on a known-bad spec
         run: |
           printf 'spec t = v 0.1 owner o exports A\n\nmode A = opaque text\ninv a = on s always p\ninv a = on s always q\n' > /tmp/bad-verify.gym
