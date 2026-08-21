@@ -140,9 +140,8 @@ independent obligations determine acceptance.
 ## Status
 
 Both implementations are complete through the adequacy campaign, and
-live synthesis has been validated end-to-end against a real model
-(12/12 candidates firewall-accepted on first attempt). The following
-are known-not-built:
+live synthesis runs end-to-end against a real model (12/12 candidates
+firewall-accepted on first attempt). The following do not exist:
 
 - acceptance `must`-assertion evaluation — the adequacy campaign's own
   measured blind spot, and the natural next verification phase

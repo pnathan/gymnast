@@ -129,8 +129,8 @@ goldens). Execution plans for phases 1–10 are in
 design (proposed, unscheduled) is `docs/shared-domains-design.md`.
 `docs/README.md` indexes every document and says which ones bind.
 
-Status: phases 1–10 complete and Opus-gate-accepted — lexer/parser/
-checker, profile expansion, elaborator, canonical IR, deterministic
+The Rust port implements the whole pipeline, all ten phases complete
+and Opus-gate-accepted: lexer/parser/checker, profile expansion, elaborator, canonical IR, deterministic
 8-node planner, prompt compiler, sexpr reader (models’ wire contract:
 `\n`/`\t`/`\r` interpreted on read; printer canonical), candidate
 firewall, recipe registry, sandboxed model runner with bounded repair,
@@ -143,15 +143,15 @@ inapplicability-honest), and surface v0.2 (named constants and live
 profile parameters substituted at elaboration, coverage-flag teeth,
 acceptance-generator actor binding — `docs/surface-v0.2-design.md`).
 714 tests across 32 binaries. Live synthesis
-validated end-to-end against a real model (12/12 candidates
+runs end-to-end against a real model (12/12 candidates
 firewall-accepted first attempt; no test or CI step ever invokes a
 model).
 
-Process: each phase ran plan → committed-oracle Sonnet crew (oracle
-tests committed red before implementation; implementers may not touch
-them; integrator-only arbitration with in-file notes) → Opus phase
-gate (adversarial review + mutation-testing the oracles). Gate
-regression tests live in `rust/tests/gate*_regression_test.rs`.
+Process: each phase runs plan → committed-oracle Sonnet crew (oracle
+tests land red before implementation; implementers may not touch them;
+integrator-only arbitration with in-file notes) → Opus phase gate
+(adversarial review + mutation-testing the oracles). Gate regression
+tests live in `rust/tests/gate*_regression_test.rs`.
 
 ```sh
 # Rust crate (run from rust/)
