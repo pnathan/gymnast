@@ -611,18 +611,35 @@ checks, or acceptance-actor binding. Contract-bearing shapes:
   except the subject's IR fingerprint. Substitution is position-aware:
   predicate operands, property execute steps, scenario `when`
   arguments, `must` operands, `under` values (including the
-  `(name unit)` quantity form), and `:min`/`:max` refinement bounds
-  substitute; clause heads, declaration names, error names and
-  `:errors` sets, generator symbols, scenario `then` values, and the
-  import node's `:arguments` never do. Offset folding
-  (`sharing_limit + 1` → 257) uses saturating arithmetic.
+  `(name unit)` quantity form), `:min`/`:max` refinement bounds, and
+  (post-gate, finding 2) the constants-only integer slots `concurrency
+  :actors`, synthesis `attempts`, and the synthesis model pack's
+  `max_attempts` substitute; clause heads, declaration names, error
+  names and `:errors` sets, generator symbols, scenario `given` and
+  `then` values, and the import node's `:arguments` never do. Offset
+  folding (`sharing_limit + 1` → 257) uses saturating arithmetic
+  (pinned by `gate10_regression_test.rs` — wrapping is the pinned-out
+  behavior).
 - **New diagnostic codes.** `E209 unresolved-constant` (error): an
   offset form `(+/- name N)` whose base names no declared constant,
-  anywhere; or a bare IDENT in a refinement bound / `under` value —
-  constants-only positions. Bare atoms in predicate positions remain
-  abstract predicates (no E209). `E210
+  anywhere; or a bare IDENT in a refinement bound / `under` value /
+  `:actors` / `attempts` / model `max_attempts` — constants-only
+  positions. Bare atoms in predicate positions remain abstract
+  predicates (no E209). `E210
   invalid-constant-expression` (parse-time error): non-integer `const`
-  right-hand side, or a malformed const-expr (`name + name`). `E201`
+  right-hand side, or a malformed const-expr (`name + name` — the
+  lexer's sign lookahead admits an identifier start so this reaches
+  the parser's E210 path rather than dying as E001). `E211
+  constant-name-collision` (error, post-gate finding 1): a constant —
+  spec `const` or profile-bound — whose name equals a behavior
+  parameter, an acceptance generator variable, a scenario `given`
+  variable, or a reserved state symbol (`pre`/`post`/`result`).
+  Name-driven substitution would silently rewrite the variable
+  (including inside authority predicates), so the collision is an
+  error at the binding site. `W411 undeclared-profile-parameter`
+  (warning, post-gate finding 8): an integer `use` argument the
+  resolved profile does not declare binds NO constant (the import
+  node's `:arguments` provenance still records it verbatim). `E201`
   extends to every duplicate-binding combination: const/const,
   const/profile-param, and the same parameter bound by two `use`
   clauses. `W408 uncovered-operation` / `W409 unexercised-transition`
@@ -657,3 +674,42 @@ checks, or acceptance-actor binding. Contract-bearing shapes:
   `(total 9) (passed 1) (failed 2) (skipped 4) (indeterminate 2)` and
   the adequacy campaign stayed 5 survivors / `pass nil` — the bytes
   moved, the verdicts did not.
+
+### Post-gate amendments (phase-10 gate, commit after 1795450)
+
+The gate ACCEPTED with findings; the fixes above (E211, W411, the
+`:actors`/`attempts`/`max_attempts` substitution positions, the E210
+lexer widening) landed as the post-gate residual commit, pinned by
+`rust/tests/gate10_regression_test.rs` (12 tests, including a direct
+never-substitute assertion and the saturating-fold pin — the gate's
+two oracle-mutation survivors). W408/W409 now genuinely surface on
+`check` AND `verify` stderr (`warning: W40x: ...`, exit unaffected),
+matching what `surface-language.md` and `surface-v0.2-design.md`
+already claimed. `E203` messages name the generator symbol as well as
+the pair variable. No golden changed: the flagship's budget slots are
+literal integers and its profile arguments are all declared, so every
+fixture is byte-identical across these fixes.
+
+Known limitations, documented rather than fixed (gate findings 7, 10,
+12, 13, 14 — all MINOR/NOTE):
+
+- **E209 spans point at the owning declaration**, not the offending
+  reference — lowered nodes are span-free S-expressions, so the
+  reference position is gone by the time substitution runs. Threading
+  spans through lowering is deferred.
+- **`actor-of` carries no pair association** (`(actor-of user)` per
+  bound pair, in pair order). The mapping variable→actor is
+  recoverable only when every pair is bound. The pinned oracle shape
+  (`v02_oracle_test.rs` oracle_07a) freezes this; enriching the shape
+  belongs to the generator-synthesis phase that will consume it,
+  under arbitration then.
+- **A typo'd const reference in a predicate position is invisible**
+  (design-sanctioned: bare atoms remain abstract predicates). The
+  constants-only positions (bounds, under, budget slots) do E209; the
+  predicate positions cannot without breaking abstract predicates.
+- **Saturation is silent**: `i64::MAX` and `i64::MAX + 1` fold to the
+  same value, collapsing a boundary probe with no diagnostic.
+- **Pre-existing, not phase-10:** ~5000 chained `and` terms overflow
+  the stack (abort, not a diagnostic); the parser recursion guard does
+  not cover this shape. Identical threshold const-spelled and
+  literal-spelled.

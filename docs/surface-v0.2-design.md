@@ -139,3 +139,19 @@ UNCHANGED — substitution preserves semantics by construction, and the
 goldens regenerate once to pick up the new IR header and W408 entries
 (`query_tasks` is now honestly flagged uncovered). Changing the limit
 becomes a one-line edit that cannot drift.
+
+## Post-gate amendments (phase-10 gate)
+
+The gate ACCEPTED with findings; the residual commit added `E211
+constant-name-collision` (a constant may not share a name with a
+behavior parameter, a generator variable, a `given` variable, or
+`pre`/`post`/`result` — name-driven substitution would silently
+rewrite the variable), extended the constants-only positions to the
+synthesis budget slots (`attempts`, model `max_attempts`) and the
+concurrency `actors` slot, widened the lexer's sign lookahead so
+`name + name` reaches the parser's E210 path, added `W411
+undeclared-profile-parameter` (an undeclared integer `use` argument
+binds no constant), and wired W408/W409 onto `check`/`verify` stderr
+as this document already promised. Pinned by
+`rust/tests/gate10_regression_test.rs`; deliberate deferrals are
+recorded in `docs/ir-contract-deltas.md` ("Post-gate amendments").

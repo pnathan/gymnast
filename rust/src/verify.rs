@@ -1184,6 +1184,42 @@ fn step_operation(step: &Sexpr) -> String {
 /// transition no step reaches is uncovered too. Flags the coverage
 /// clause does not list produce no checks; warnings, never errors — a
 /// gap is information, not invalidity.
+/// The W408/W409 coverage warnings for an IR, rendered as
+/// `"W40x: message"` strings for CLI stderr (post-gate-10, finding 3:
+/// the docs promise they surface on `check`/`verify` stderr, not only
+/// inside the bundle's `coverage-diagnostics` field). Computed from the
+/// same lowering and the same check as the bundle field, so the two can
+/// never disagree.
+pub fn coverage_warning_messages(ir: &Ir) -> Vec<String> {
+    let obligations = lower_all_obligations(ir);
+    coverage_check_diagnostics(ir, &obligations)
+        .iter()
+        .filter_map(|d| {
+            let inner = d.as_list()?;
+            let code = inner
+                .iter()
+                .find_map(|item| {
+                    let kv = item.as_list()?;
+                    if kv.len() == 2 && kv[0].as_sym() == Some("code") {
+                        kv[1].as_str()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or("W4??");
+            let message = inner.iter().find_map(|item| {
+                let kv = item.as_list()?;
+                if kv.len() == 2 && kv[0].as_sym() == Some("message") {
+                    kv[1].as_str()
+                } else {
+                    None
+                }
+            })?;
+            Some(format!("{}: {}", code, message))
+        })
+        .collect()
+}
+
 fn coverage_check_diagnostics(ir: &Ir, obligations: &[Sexpr]) -> Vec<Sexpr> {
     let transitions = extract_transitions(ir);
     let mut diags = Vec::new();

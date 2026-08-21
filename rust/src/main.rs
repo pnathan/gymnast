@@ -135,10 +135,12 @@ fn cmd_check(src: &str, file_path: &str, _file_name: &str) {
     // checking over expanded declarations, duplicate semantic IDs) and
     // discard the IR: `check` and `ir` report from one code path, so
     // they can never disagree about whether a spec is valid.
+    let mut ir_for_coverage = None;
     if let Some(file) = ast {
         let parse_diags = std::mem::take(&mut diags);
-        let (_ir, all_diags) = elaborate::elaborate_with_parse_diags(&file, &parse_diags);
+        let (ir, all_diags) = elaborate::elaborate_with_parse_diags(&file, &parse_diags);
         diags = all_diags;
+        ir_for_coverage = Some(ir);
     }
 
     // Render all diagnostics to stderr
@@ -149,6 +151,18 @@ fn cmd_check(src: &str, file_path: &str, _file_name: &str) {
 
     // Exit with error if any diagnostic is an error
     let has_errors = diags.iter().any(|d| d.severity == Severity::Error);
+
+    // W408/W409 coverage warnings surface on `check` stderr too
+    // (post-gate-10, finding 3) — but only over an error-free IR, since
+    // coverage over a broken spec is noise. Warnings never affect exit.
+    if !has_errors {
+        if let Some(ir) = &ir_for_coverage {
+            for msg in verify::coverage_warning_messages(ir) {
+                eprintln!("warning: {}", msg);
+            }
+        }
+    }
+
     std::process::exit(if has_errors { 1 } else { 0 });
 }
 
@@ -227,6 +241,15 @@ fn cmd_verify(src: &str, file_path: &str, _file_name: &str) {
     let bundle_error_messages = verify::bundle_error_diagnostics(&bundle);
     for msg in &bundle_error_messages {
         eprintln!("error: {}", msg);
+    }
+
+    // W408/W409 coverage warnings surface on `verify` stderr as the docs
+    // promise (post-gate-10, finding 3); they also live in the bundle's
+    // `coverage-diagnostics` field. Warnings never affect the exit code.
+    if !parse_errors && !ir.has_errors() {
+        for msg in verify::coverage_warning_messages(&ir) {
+            eprintln!("warning: {}", msg);
+        }
     }
 
     std::process::exit(

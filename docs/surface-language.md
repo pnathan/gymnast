@@ -190,20 +190,31 @@ const max_title    = 200
   - property / concurrency / fault `must` operands,
   - workload `under` values, including the quantity form
     (`duration dur min`),
-  - mode refinement bounds (`text (1..max_title)`).
+  - mode refinement bounds (`text (1..max_title)`),
+  - the synthesis budget slots (`attempts`, the model pack's
+    `max_attempts`) and the concurrency `actors` slot.
 - **Substitution happens at elaboration**: every IR form downstream
   carries the literal value, exactly as if the author had written it.
   Never substituted: clause heads, declaration names, error names and
-  `!` error sets, generator symbols, scenario `then` values, and the
-  import node's recorded `:arguments` (provenance). The binding itself
+  `!` error sets, generator symbols, scenario `given` and `then`
+  values, and the import node's recorded `:arguments` (provenance).
+  Substitution is name-driven, so a constant may not share a name with
+  an author-declared variable: a constant whose name equals a behavior
+  parameter, an acceptance generator variable, a scenario `given`
+  variable, or `pre`/`post`/`result` is `E211
+  constant-name-collision` (hard error — otherwise the substitution
+  would silently rewrite the variable). An integer `use` argument the
+  profile does not declare binds no constant and warns `W411
+  undeclared-profile-parameter`. The binding itself
   survives into the IR module header's `:constants` field
   (`((name value source) ...)`, sorted by name, present when
   non-empty, fingerprinted like every header field).
 - `E209 unresolved-constant` (closed world, hard error): an offset
   form `name + N` / `name - N` whose name is no declared constant,
-  anywhere; or a bare IDENT in a refinement bound or `under` value
-  (positions where only constants are legal). Bare atoms in predicate
-  positions remain abstract predicates, exactly as before.
+  anywhere; or a bare IDENT in a refinement bound, `under` value,
+  `actors`, `attempts`, or model `max_attempts` slot (positions where
+  only constants are legal). Bare atoms in predicate positions remain
+  abstract predicates, exactly as before.
 
 ### Coverage clauses with teeth
 

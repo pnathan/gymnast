@@ -330,15 +330,20 @@ impl<'a> Lexer<'a> {
     }
 
     /// True when the next non-whitespace byte after the current position
-    /// is an ASCII digit — the lookahead that keeps `+`/`-` tokens
-    /// confined to the v0.2 const-expr grammar (`IDENT ± INT`) without
-    /// changing how any other stray sign character lexes.
+    /// starts a const-expr operand — an ASCII digit, or (post-gate-10,
+    /// finding 4) an identifier start, so `name + name` reaches the
+    /// parser's E210 `invalid-constant-expression` path instead of dying
+    /// here as a generic E001. Signs before any other character (`->`'s
+    /// `>`, stray punctuation) still lex as they always did.
     fn next_nonspace_is_digit(&self) -> bool {
         let mut p = self.pos;
         while p < self.bytes.len() && (self.bytes[p] as char).is_whitespace() {
             p += 1;
         }
-        p < self.bytes.len() && self.bytes[p].is_ascii_digit()
+        p < self.bytes.len()
+            && (self.bytes[p].is_ascii_digit()
+                || self.bytes[p].is_ascii_alphabetic()
+                || self.bytes[p] == b'_')
     }
 
     fn skip_whitespace_and_comments(&mut self) {

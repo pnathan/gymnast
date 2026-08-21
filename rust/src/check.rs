@@ -509,16 +509,18 @@ impl Checker {
                     continue;
                 };
                 for pair in pairs {
-                    if let Some(target) = of_bound_actor(&pair.value) {
+                    if let Some((generator, target)) = of_bound_actor(&pair.value) {
                         if !self.symtab.actors.contains_key(&target.text) {
+                            // Post-gate-10 (gate finding 9): name the
+                            // generator symbol, not just the pair key.
                             self.diag(
                                 Severity::Error,
                                 "E203",
                                 target.span,
                                 format!(
-                                    "acceptance generator '{}' binds unknown \
-                                     actor '{}' via `of`",
-                                    pair.key.text, target.text
+                                    "acceptance generator '{}' (variable '{}') binds \
+                                     unknown actor '{}' via `of`",
+                                    generator.text, pair.key.text, target.text
                                 ),
                             );
                         }
@@ -651,9 +653,10 @@ impl Checker {
     }
 }
 
-/// The actor name an `of`-bound generate-pair value binds, if this value
-/// is the v0.2 three-word `of` capture (`<gen> of <actor-name>`).
-fn of_bound_actor(value: &PackValue) -> Option<&Ident> {
+/// The generator symbol and actor name an `of`-bound generate-pair
+/// value binds, if this value is the v0.2 three-word `of` capture
+/// (`<gen> of <actor-name>`).
+fn of_bound_actor(value: &PackValue) -> Option<(&Ident, &Ident)> {
     let PackValue::List(items) = value else {
         return None;
     };
@@ -661,10 +664,8 @@ fn of_bound_actor(value: &PackValue) -> Option<&Ident> {
         return None;
     }
     match (&items[0], &items[1], &items[2]) {
-        (PackValue::Word(_gen), PackValue::Word(kw), PackValue::Word(target))
-            if kw.text == "of" =>
-        {
-            Some(target)
+        (PackValue::Word(gen), PackValue::Word(kw), PackValue::Word(target)) if kw.text == "of" => {
+            Some((gen, target))
         }
         _ => None,
     }
