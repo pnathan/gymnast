@@ -73,7 +73,7 @@ src/
   serialize.lisp     canonical serialization contract and trust-boundary validation
   cli.lisp           CLI entrypoint: check, ir, plan, prompts, compile subcommands
 tests/
-  compiler.lisp      111 tests: front-half pipeline, platform, transitions, verification, ports, multi-target
+  compiler.lisp      112 tests: front-half pipeline, platform, transitions, verification, ports, multi-target
   core-types.lisp    48 tests: core data constructors and helpers
   transition-types.lisp  4 tests: transition record types
   recipe-types.lisp  4 tests: recipe record types
@@ -82,6 +82,11 @@ tests/
   synthesizer-types.lisp 13 tests: Claude subprocess synthesizer
   fixtures/golden/   golden files: ir.sexpr, plan.sexpr, prompts.sexpr, compilation.sexpr
 examples/
+  todo.gym           vertical-slice Todo app in the compact surface (flagship fixture)
+  bug-tracker.gym    bug tracker (project members file, triage, assign)
+  gantt.gym          Gantt chart tool (dependency-linked task plans)
+  chatbot.gym        chatbot service
+  bi-ingest.gym      BI analytics ingest server (quota-bounded event journal)
   todo.lisp          vertical-slice Todo app (Ruby/Rails target)
   todo-go.lisp       Todo app targeting Go/stdlib
   todo-java.lisp     Todo app targeting Java/Spring
@@ -92,6 +97,9 @@ examples/
   twitter-java.lisp  Twitter clone targeting Java/Spring
   twitter-python.lisp Twitter clone targeting Python/Django
   twitter-rust.lisp  Twitter clone targeting Rust/Actix
+rust/                gymnast-rs: complete Rust pipeline (see below)
+docs/
+  README.md          documentation index: what each document is and whether it binds
 platform/
   ruby/              Ruby platform kit: adapters, test doubles, model provider
 scripts/
@@ -111,15 +119,17 @@ scripts/
 A Rust reimplementation of the FULL pipeline lives in `rust/` (std-only
 crate `gymnast-rs`, zero dependencies, `#![forbid(unsafe_code)]`),
 targeting a compact Algol 68-flavored surface language (`.gym` files;
-design in `docs/surface-language.md`; examples `examples/todo.gym` and
-`examples/bi-ingest.gym`). The `.lisp` corpus and Lamedh implementation
-remain the semantic reference; every deliberate deviation is catalogued
-in `docs/ir-contract-deltas.md` (the authority — consumers port against
-it, never against Lamedh goldens). Execution plans for phases 1–9 are in
+design in `docs/surface-language.md`; examples `todo.gym`,
+`bug-tracker.gym`, `gantt.gym`, `chatbot.gym`, `bi-ingest.gym`). The
+`.lisp` corpus and Lamedh implementation remain the semantic reference;
+every deliberate deviation is catalogued in `docs/ir-contract-deltas.md`
+(the authority — consumers port against it, never against Lamedh
+goldens). Execution plans for phases 1–10 are in
 `docs/rust-port-plan*.md`; the shared-domains / gRPC / OpenAPI interop
-design (proposed phase 10+) is `docs/shared-domains-design.md`.
+design (proposed, unscheduled) is `docs/shared-domains-design.md`.
+`docs/README.md` indexes every document and says which ones bind.
 
-Status: phases 1–9 complete and Opus-gate-accepted — lexer/parser/
+Status: phases 1–10 complete and Opus-gate-accepted — lexer/parser/
 checker, profile expansion, elaborator, canonical IR, deterministic
 8-node planner, prompt compiler, sexpr reader (models’ wire contract:
 `\n`/`\t`/`\r` interpreted on read; printer canonical), candidate
@@ -129,7 +139,10 @@ executable transition calculus with tri-state (`Holds`/`Fails`/
 addressed caching (library-only), assembly and promotion evidence
 bundles (six fail-closed checks; `hold`/`promote`), and the adequacy
 campaign with baseline-aware mutation detection (subject-bound,
-inapplicability-honest). 675+ tests across 31 binaries. Live synthesis
+inapplicability-honest), and surface v0.2 (named constants and live
+profile parameters substituted at elaboration, coverage-flag teeth,
+acceptance-generator actor binding — `docs/surface-v0.2-design.md`).
+714 tests across 32 binaries. Live synthesis
 validated end-to-end against a real model (12/12 candidates
 firewall-accepted first attempt; no test or CI step ever invokes a
 model).
@@ -220,8 +233,8 @@ cargo run -- synthesize ../examples/todo.gym /tmp/out 3  # LIVE model; never in 
 
 ## Issue roadmap (dependency order)
 
-Issues #1–#10 are closed; #17 is addressed by this document's
-current revision. Issues #12, #23, and #37 remain open.
+Closed: #1–#10, #17–#21, #23, #29, #36, #38. Open: #12, #30, #31,
+#32, #33, #34, #37.
 
 | # | Title | Status |
 |---|-------|--------|
@@ -236,8 +249,18 @@ current revision. Issues #12, #23, and #37 remain open.
 | 9 | Assembly and promotion evidence bundles | Closed |
 | 10 | Adequacy campaign (mutation/concurrency/fault) | Closed |
 | 12 | North star architecture document | Open |
-| 17 | Update CLAUDE.md to match current codebase | Addressed |
-| 23 | Benchmark for merges | Open |
+| 17 | Update CLAUDE.md to match current codebase | Closed |
+| 18 | Prompt capability contracts hardcoded to Ruby platform | Closed |
+| 19 | Invariant verification only checks initial state | Closed |
+| 20 | Remove dead code: canonical-data and unused bindings | Closed |
+| 21 | Move gymnast-keyword-value to core.lisp | Closed |
+| 23 | Benchmark for merges | Closed |
+| 29 | Coverage-gap flags silently ignored | Closed |
+| 30 | Promotion ignores verification results and policy | Open |
+| 31 | Dead `(none)` sentinel checks in firewall and prompts | Open |
+| 32 | CLI double-elaborates spec on `compile` | Open |
+| 33 | Dead code: 9 functions with zero callers | Open |
+| 34 | Consolidate duplicated patterns and accessors | Open |
 | 36 | Unknown profile imports → hard error | Closed |
 | 37 | Fixed 8-node plan template regardless of spec complexity | Open |
 | 38 | Component port declarations for external boundaries | Closed |
@@ -246,13 +269,13 @@ current revision. Issues #12, #23, and #37 remain open.
 
 TWO implementations of the complete compiler pipeline:
 
-**Lamedh (reference)**: surface through assembly, with 192 tests across
-7 test files and 10 example specifications, including component port
-declarations for external boundaries (issue #38).
+**Lamedh (reference)**: surface through adequacy, with 192 tests across
+7 test files and 10 `.lisp` example specifications, including component
+port declarations for external boundaries (issue #38).
 
 **Rust (`rust/`, at full parity with the pre-port-declaration
-reference, plus deliberate hardening deltas)**: 675+ tests across 31
-binaries, eight byte-stable goldens
+reference, plus deliberate hardening deltas and surface v0.2)**: 714
+tests across 32 binaries, five `.gym` example specifications, eight byte-stable goldens
 (ir/plan/prompts/verify/results/bundle/adequacy + reproducible compile
 trees), all CI-diffed. Verification is tri-state-honest (no vacuous
 passes, no fabricated failures), promotion is fail-closed, the
@@ -261,7 +284,9 @@ blind spots (todo.gym today: all five standard mutants survive —
 `pass nil` — because must-assertions are not yet evaluated). Lamedh’s
 new port declarations (#38) are not yet ported — they align with the
 interop direction of `docs/shared-domains-design.md` and belong to
-that phase.
+that phase. Surface v0.2 (phase 10) is Rust-only by construction: it
+is a surface-language revision, and the Lamedh surface is the one being
+retired.
 
 The Lamedh reference provides:
 
@@ -283,7 +308,24 @@ The Lamedh reference provides:
 - Adequacy campaign framework (mutation, concurrency, fault injection)
 - Canonical serialization with trust-boundary validation
 - Multi-target examples (Ruby, Go, Java, Python, Rust) for both Todo and Twitter specs
-- CI: format check, test suite, Todo elaboration, reproducible compilation
+- CI: format check, static check, test suite, Todo elaboration,
+  reproducible compilation
+
+The Rust port additionally provides:
+
+- A compact `.gym` surface with span-carrying diagnostics from a
+  hand-rolled lexer and recursive-descent parser
+- Surface v0.2: named constants and live profile parameters,
+  substituted at elaboration so that a const-spelled spec and its
+  literal-spelled twin produce identical downstream results;
+  coverage-flag enforcement against the declared interface; acceptance
+  generators bound to declared actors
+- Tri-state verification (`Holds`/`Fails`/`Unknown`) with an
+  `indeterminate` status rather than vacuous passes
+- Fail-closed promotion (`hold`/`promote`) over six checks
+- CI: fmt, warnings-as-errors build, tests, known-bad-spec rejection,
+  and byte-diffed goldens for ir/plan/prompts/verify/results/bundle/
+  adequacy plus reproducible compile trees
 
 ## What is not built
 
@@ -297,5 +339,8 @@ The Lamedh reference provides:
 - Cache CLI wiring (cache.rs is library-only; any future hit path MUST
   re-run the candidate firewall — the key covers the contract, not the
   candidate’s conformance)
+- Port declarations in the Rust port (Lamedh-only today, issue #38)
 - North star architecture document (issue #12)
-- Benchmark for merges (issue #23)
+- Open code-health items: promotion policy wiring (#30), dead sentinel
+  checks (#31), CLI double-elaboration (#32), dead functions (#33),
+  duplicated accessor patterns (#34), spec-proportional planning (#37)

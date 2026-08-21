@@ -1,8 +1,9 @@
 # Shared domain definitions for cross-application communication
 
-Status: DESIGN (proposed phase 10+). Nothing here is implemented; this
-document records the considered design so the eventual execution plan
-can be derived from it the way phases 3–9 were.
+Status: DESIGN (proposed, unscheduled — phase 10 went to surface v0.2
+instead). Nothing here is implemented; this document records the
+considered design so the eventual execution plan can be derived from it
+the way phases 3–10 were.
 
 ## Problem
 
