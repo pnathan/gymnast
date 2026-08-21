@@ -287,9 +287,8 @@ outcome are byte-for-byte unchanged from the literal spelling.
 
 ## Migration notes
 
-Parsing is hand-rolled lexer + recursive descent in the Rust port (no parser
-generator): the grammar is small and diagnostic quality is the product —
-span-carrying errors from day one. The `.lisp` examples remain in-tree as
-the reference corpus until the Rust elaborator's IR output is confirmed
-equivalent (modulo surface-syntax fields) against the Lamedh implementation,
-then the S-expression surface is retired.
+Parsing is hand-rolled lexer + recursive descent (no parser generator):
+the grammar is small and diagnostic quality is the product —
+span-carrying errors from day one. The prior S-expression surface
+(Lamedh, `.lisp`) has been retired now that the elaborator's IR output
+was confirmed equivalent (modulo surface-syntax fields) against it.
