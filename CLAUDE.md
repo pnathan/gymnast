@@ -1,6 +1,6 @@
 # Gymnast
 
-Concept-synthesis compiler in Lamedh. A programmer writes one high-level
+Concept-synthesis compiler in Rust. A programmer writes one high-level
 application specification; Gymnast elaborates it into a closed semantic IR,
 derives a deterministic synthesis plan, and emits bounded work packets for
 deterministic recipes or small language models.
@@ -10,153 +10,17 @@ authority it has, or whether its own output is correct.
 
 ## Toolchain
 
-Language: [Lamedh](https://github.com/pnathan/lamedh) (a Lisp with fexprs,
-`vau` operatives, macros, `deftest`).  Runtime pinned in `LAMEDH_VERSION`
-(currently v0.4.0).
-
-```sh
-scripts/bootstrap-lamedh.sh          # install pinned binary to .tools/bin/
-```
+Implementation: Rust, std-only crate `gymnast-rs` in `rust/`, zero
+dependencies, `#![forbid(unsafe_code)]`. Surface language: a compact
+Algol-68-flavored language (`.gym` files; design in
+`docs/surface-language.md`).
 
 ## Commands
 
 ```sh
-# Run all tests
-.tools/bin/lamedh --test tests
-
-# Format check (CI runs this)
-find src tests examples -type f -name '*.lisp' -print0 | sort -z | xargs -0 .tools/bin/lamedh --fmt-check
-
-# Auto-format a file
-.tools/bin/lamedh --fmt <file>
-
-# Elaborate a spec (validates closed-world diagnostics)
-bin/gymnast check examples/todo.lisp todo-spec
-
-# Print IR / plan / prompts
-bin/gymnast ir examples/todo.lisp todo-spec
-bin/gymnast plan examples/todo.lisp todo-spec
-bin/gymnast prompts examples/todo.lisp todo-spec
-
-# Full compilation to directory
-bin/gymnast compile examples/todo.lisp todo-spec build/todo
-
-# Reproducibility test (CI runs this)
-bin/gymnast compile examples/todo.lisp todo-spec build/one
-bin/gymnast compile examples/todo.lisp todo-spec build/two
-diff -ru build/one build/two
-
-# Synthesis benchmark (requires ANTHROPIC_API_KEY)
-scripts/benchmark.sh
-```
-
-## File layout
-
-```
-src/
-  gymnast.lisp       load unit; includes all 16 modules, defines gymnast-compile
-  core.lisp          data constructors, helpers, FNV-1a fingerprinting, IR/plan node types
-  surface.lisp       fexprs, vau, defspec macro, use-profile macro, port declaration
-  profile.lisp       versioned semantic profiles: registration, resolution, parameterization
-  elaborate.lisp     surface-to-IR elaboration with closed-world diagnostics
-  plan.lisp          deterministic lowering from IR to 8-node typed synthesis DAG
-  candidate.lisp     candidate protocol validation / firewall
-  transition.lisp    executable transition calculus: extraction, predicate eval, trace execution
-  platform.lisp      platform kit registry: capability adapters per target language
-  prompt.lisp        prompt compilation from node contracts
-  recipe.lisp        deterministic recipe registry and executor
-  runner.lisp        sandboxed small-model node runner with bounded repair
-  verify.lisp        independent verification obligations and trace-equivalence checks
-  cache.lisp         content-addressed caching and incremental regeneration
-  assembly.lisp      assembly and promotion evidence bundles
-  adequacy.lisp      adequacy campaign: mutation, concurrency, and fault injection
-  serialize.lisp     canonical serialization contract and trust-boundary validation
-  cli.lisp           CLI entrypoint: check, ir, plan, prompts, compile subcommands
-tests/
-  compiler.lisp      112 tests: front-half pipeline, platform, transitions, verification, ports, multi-target
-  core-types.lisp    48 tests: core data constructors and helpers
-  transition-types.lisp  4 tests: transition record types
-  recipe-types.lisp  4 tests: recipe record types
-  cache-types.lisp   7 tests: cache record types
-  assembly-types.lisp    5 tests: assembly record types
-  synthesizer-types.lisp 13 tests: Claude subprocess synthesizer
-  fixtures/golden/   golden files: ir.sexpr, plan.sexpr, prompts.sexpr, compilation.sexpr
-examples/
-  todo.gym           vertical-slice Todo app in the compact surface (flagship fixture)
-  bug-tracker.gym    bug tracker (project members file, triage, assign)
-  gantt.gym          Gantt chart tool (dependency-linked task plans)
-  chatbot.gym        chatbot service
-  bi-ingest.gym      BI analytics ingest server (quota-bounded event journal)
-  todo.lisp          vertical-slice Todo app (Ruby/Rails target)
-  todo-go.lisp       Todo app targeting Go/stdlib
-  todo-java.lisp     Todo app targeting Java/Spring
-  todo-python.lisp   Todo app targeting Python/Django
-  todo-rust.lisp     Todo app targeting Rust/Actix
-  twitter.lisp       Twitter clone (Ruby/Rails target)
-  twitter-go.lisp    Twitter clone targeting Go/stdlib
-  twitter-java.lisp  Twitter clone targeting Java/Spring
-  twitter-python.lisp Twitter clone targeting Python/Django
-  twitter-rust.lisp  Twitter clone targeting Rust/Actix
-rust/                gymnast-rs: complete Rust pipeline (see below)
-docs/
-  README.md          documentation index: what each document is and whether it binds
-platform/
-  ruby/              Ruby platform kit: adapters, test doubles, model provider
-scripts/
-  benchmark.sh                 integration benchmark: 5 langs × 2 specs × 3 trials
-  run-benchmark-target.lisp    per-target benchmark runner (called by benchmark.sh)
-  bootstrap-lamedh.sh         install pinned Lamedh binary
-  synthesis-trials.lisp        multi-language synthesis benchmark
-  synthesize-enriched.lisp     enriched synthesis runner
-  synthesize-java.lisp         Java synthesis runner
-  synthesize-multi-target.lisp multi-target synthesis runner
-  synthesize-persistence.lisp  persistence synthesis runner
-  show-persistence-prompt.lisp prompt inspection utility
-```
-
-## Rust port (complete pipeline)
-
-A Rust reimplementation of the FULL pipeline lives in `rust/` (std-only
-crate `gymnast-rs`, zero dependencies, `#![forbid(unsafe_code)]`),
-targeting a compact Algol 68-flavored surface language (`.gym` files;
-design in `docs/surface-language.md`; examples `todo.gym`,
-`bug-tracker.gym`, `gantt.gym`, `chatbot.gym`, `bi-ingest.gym`). The
-`.lisp` corpus and Lamedh implementation remain the semantic reference;
-every deliberate deviation is catalogued in `docs/ir-contract-deltas.md`
-(the authority — consumers port against it, never against Lamedh
-goldens). Execution plans for phases 1–10 are in
-`docs/rust-port-plan*.md`; the shared-domains / gRPC / OpenAPI interop
-design (proposed, unscheduled) is `docs/shared-domains-design.md`.
-`docs/README.md` indexes every document and says which ones bind.
-
-The Rust port implements the whole pipeline, all ten phases complete
-and Opus-gate-accepted: lexer/parser/checker, profile expansion, elaborator, canonical IR, deterministic
-8-node planner, prompt compiler, sexpr reader (models’ wire contract:
-`\n`/`\t`/`\r` interpreted on read; printer canonical), candidate
-firewall, recipe registry, sandboxed model runner with bounded repair,
-executable transition calculus with tri-state (`Holds`/`Fails`/
-`Unknown`) verification and the `indeterminate` status, content-
-addressed caching (library-only), assembly and promotion evidence
-bundles (six fail-closed checks; `hold`/`promote`), and the adequacy
-campaign with baseline-aware mutation detection (subject-bound,
-inapplicability-honest), and surface v0.2 (named constants and live
-profile parameters substituted at elaboration, coverage-flag teeth,
-acceptance-generator actor binding — `docs/surface-v0.2-design.md`).
-714 tests across 32 binaries. Live synthesis
-runs end-to-end against a real model (12/12 candidates
-firewall-accepted first attempt; no test or CI step ever invokes a
-model).
-
-Process: each phase runs plan → committed-oracle Sonnet crew (oracle
-tests land red before implementation; implementers may not touch them;
-integrator-only arbitration with in-file notes) → Opus phase gate
-(adversarial review + mutation-testing the oracles). Gate regression
-tests live in `rust/tests/gate*_regression_test.rs`.
-
-```sh
 # Rust crate (run from rust/)
 cargo build            # warnings are errors in CI
-cargo test             # full suite
+cargo test              # full suite
 cargo fmt --all -- --check
 cargo run -- check ../examples/todo.gym
 cargo run -- ir ../examples/todo.gym       # canonical IR; byte-stable, CI-diffed
@@ -168,9 +32,105 @@ cargo run -- compile ../examples/todo.gym /tmp/build   # + evidence-bundle.sexpr
 cargo run -- synthesize ../examples/todo.gym /tmp/out 3  # LIVE model; never in CI
 ```
 
+No test or CI step ever invokes a model.
+
+## File layout
+
+```
+rust/                gymnast-rs: the compiler (std-only, zero dependencies)
+  src/
+    main.rs            CLI entrypoint: parse, check, ir, plan, prompts, verify,
+                       adequacy, compile, synthesize
+    lexer.rs           hand-rolled lexer over the .gym surface
+    parser.rs          recursive-descent parser producing a typed AST with spans
+    ast.rs             typed surface AST
+    check.rs           closed-world surface checker
+    profile.rs         versioned semantic profiles: static registry, expansion
+    elaborate.rs       surface-to-IR elaboration, constant substitution
+    ir.rs              canonical IR: nodes, partitions, semantic IDs
+    plan.rs            deterministic lowering to the 8-node synthesis DAG
+    prompt.rs          prompt compilation from node contracts
+    platform.rs        platform kit registry: capabilities per target language
+    candidate.rs       candidate protocol validation / firewall
+    recipe.rs          deterministic recipe registry and executor
+    runner.rs          sandboxed model node runner with bounded repair
+    transition.rs      executable transition calculus, bounded trace execution
+    verify.rs          verification obligations, tri-state evaluation
+    cache.rs           content-addressed caching (library-only)
+    assembly.rs        assembly and promotion evidence bundles
+    adequacy.rs        mutation, concurrency, and fault injection campaigns
+    sexpr.rs           canonical S-expression reader/printer
+    diag.rs            diagnostics; span.rs, fingerprint.rs, lib.rs
+  tests/               30+ test binaries; fixtures/ holds the byte-stable goldens
+platform/
+  ruby/              Ruby platform kit consumed by SYNTHESIZED applications:
+                     nine capability adapters, test doubles, model provider.
+                     Plain Ruby, not compiler code.
+scripts/
+  benchmark.sh       synthesis benchmark: 5 langs x 2 specs x 3 trials, driven
+                     by `gymnast-rs synthesize`. Needs ANTHROPIC_API_KEY; CI
+                     never runs it.
+examples/
+  todo.gym           vertical-slice Todo app in the compact surface (flagship fixture)
+  bug-tracker.gym    bug tracker (project members file, triage, assign)
+  gantt.gym          Gantt chart tool (dependency-linked task plans)
+  chatbot.gym        chatbot service
+  bi-ingest.gym      BI analytics ingest server (quota-bounded event journal)
+  todo-go.gym        Todo app targeting Go/stdlib
+  todo-java.gym      Todo app targeting Java/Spring
+  todo-python.gym    Todo app targeting Python/Django
+  todo-rust.gym      Todo app targeting Rust/Actix
+  twitter.gym        Twitter clone (Ruby/Rails target)
+  twitter-go.gym     Twitter clone targeting Go/stdlib
+  twitter-java.gym   Twitter clone targeting Java/Spring
+  twitter-python.gym Twitter clone targeting Python/Django
+  twitter-rust.gym   Twitter clone targeting Rust/Actix
+docs/
+  README.md          documentation index: what each document is and whether it binds
+```
+
+## Rust implementation (complete pipeline)
+
+The complete pipeline lives in `rust/` (std-only crate `gymnast-rs`, zero
+dependencies, `#![forbid(unsafe_code)]`), targeting a compact Algol
+68-flavored surface language (`.gym` files; design in
+`docs/surface-language.md`; examples `todo.gym`, `bug-tracker.gym`,
+`gantt.gym`, `chatbot.gym`, `bi-ingest.gym`). The IR's shape and known
+limitations are catalogued in `docs/ir-contract-deltas.md` (the
+authority — consumers port against it, never against stale goldens).
+Execution plans for phases 1–10 are in `docs/rust-port-plan*.md`; the
+shared-domains / gRPC / OpenAPI interop design (proposed, unscheduled)
+is `docs/shared-domains-design.md`. `docs/README.md` indexes every
+document and says which ones bind.
+
+The pipeline is complete, all ten phases done and Opus-gate-accepted:
+lexer/parser/checker, profile expansion, elaborator, canonical IR,
+deterministic 8-node planner, prompt compiler, sexpr reader (models’
+wire contract: `\n`/`\t`/`\r` interpreted on read; printer canonical),
+candidate firewall, recipe registry, sandboxed model runner with
+bounded repair, executable transition calculus with tri-state
+(`Holds`/`Fails`/`Unknown`) verification and the `indeterminate`
+status, content-addressed caching (library-only), assembly and
+promotion evidence bundles (six fail-closed checks; `hold`/`promote`),
+the adequacy campaign with baseline-aware mutation detection
+(subject-bound, inapplicability-honest), and surface v0.2 (named
+constants and live profile parameters substituted at elaboration,
+coverage-flag teeth, acceptance-generator actor binding —
+`docs/surface-v0.2-design.md`). 736 tests across 34 binaries. Live
+synthesis runs end-to-end against a real model (12/12 candidates
+firewall-accepted first attempt; no test or CI step ever invokes a
+model).
+
+Process: each phase runs plan → committed-oracle Sonnet crew (oracle
+tests land red before implementation; implementers may not touch them;
+integrator-only arbitration with in-file notes) → Opus phase gate
+(adversarial review + mutation-testing the oracles). Gate regression
+tests live in `rust/tests/gate*_regression_test.rs`.
+
 ## Compiler pipeline
 
-1. **Surface** — fexpr/vau capture of declaration operands without evaluation
+1. **Surface** — lexer + recursive-descent parser capture declaration
+   operands without evaluation
 2. **Profile resolution** — versioned semantic profiles registered by name and
    version, resolved into the elaboration context
 3. **Elaboration** — closed-world validation, semantic IDs, partitioning into
@@ -196,21 +156,28 @@ cargo run -- synthesize ../examples/todo.gym /tmp/out 3  # LIVE model; never in 
 
 ## Code conventions
 
-- All public functions prefixed `gymnast-` (e.g. `gymnast-elaborate`,
-  `gymnast-plan-node-field`).
-- Data is S-expression association lists: `(list 'tag (list 'key value) ...)`.
-- Access via `gymnast-assoc-value`, predicates via `gymnast-tagged-p`.
-- Canonical ordering via `gymnast-canonical-fields` / `gymnast-canonical-less-p`.
-- Diagnostics use `(make-gymnast-diagnostic severity code subject message details)`.
-- Schema versions in `$gymnast-*-schema` globals (e.g. `"gymnast.ir/0.1"`).
-- Tests use `deftest` and `assert-equal` / `assert-true` / `assert-false`.
-- Fingerprints use FNV-1a via `gymnast-fingerprint` / `gymnast-fingerprint-string`.
-- IR nodes have stable semantic IDs: `module-name/kind/name`.
-- Plan nodes have IDs: `module-name/plan/local-name`.
-- Platform capabilities registered via `putp`/`getp` property system, looked up
-  by target language.
-- Record types declared with `defrecord`, accessed with `record-ref` and
-  type-predicate `typename-p`.
+- One module per pipeline stage in `rust/src/`, named for the stage.
+- Stage output is canonical S-expressions built with `crate::sexpr::Sexpr`;
+  `Sexpr::print()` is the single canonical printer, and the reader interprets
+  `\n`/`\t`/`\r` on the way in (the models' wire contract).
+- IR nodes carry stable semantic IDs `module/kind/name`; plan nodes use
+  `module/plan/local-name`. Parse an ID as `module / kind / rest` — profile
+  paths contain `/`, so a three-way split is wrong.
+- Diagnostics come from `crate::diag`, carry a source span, and use coded
+  identifiers: `E1xx` lexer/parser, `E2xx` check/elaborate, `E4xx` plan stage,
+  `E5xx` candidate firewall, `W4xx` warnings.
+- Schema versions are string constants like `"gymnast.ir/0.1"`.
+- Fingerprints use FNV-1a via `crate::fingerprint`.
+- Platform capabilities live in `crate::platform`'s static registry, looked up
+  by target language. Capability NAMES are lookup keys and must match the
+  vocabulary `crate::plan` emits verbatim (hyphenated: `id-source`,
+  `durable-store`); guarantees and failure modes are projected text and use
+  underscores.
+- Goldens in `rust/tests/fixtures/` are byte-stable and CI-diffed. Regenerate
+  one only when a change is deliberately meant to move it, and say so.
+- Tests are `#[test]` fns. Oracle tests land before the implementation they
+  pin (the committed-oracle discipline), and implementers do not edit them.
+- `cargo build` must pass with `RUSTFLAGS='-D warnings'`; `cargo fmt` clean.
 
 ## Architecture invariants
 
@@ -221,7 +188,9 @@ cargo run -- synthesize ../examples/todo.gym /tmp/out 3  # LIVE model; never in 
   outside declared paths, or self-evaluate.
 - Every normative semantic node must appear in at least one implementation path
   and one evidence path.
-- Surface reflection ends at elaboration; planning onward consumes immutable data.
+- The surface is closed: no user macros, no evaluation, no escape hatches.
+  Extensibility is exactly profile parameterization. Planning onward consumes
+  immutable data.
 - Transition traces are bounded (default 1000 steps) and produce stable
   counterexamples for illegal state transitions.
 - Verification checks invariants against both initial state and all
@@ -267,62 +236,45 @@ Closed: #1–#10, #17–#21, #23, #29, #36, #38. Open: #12, #30, #31,
 
 ## What is built
 
-TWO implementations of the complete compiler pipeline:
+The complete compiler pipeline, in Rust (`rust/`): surface through
+adequacy, plus deliberate hardening deltas and surface v0.2. 736 tests
+across 34 binaries, 14 `.gym` example specifications, eight
+byte-stable goldens (ir/plan/prompts/verify/results/bundle/adequacy +
+reproducible compile trees), all CI-diffed. Verification is
+tri-state-honest (no vacuous passes, no fabricated failures),
+promotion is fail-closed, the adequacy campaign is subject-bound and
+reports the verifier’s real blind spots (todo.gym today: all five
+standard mutants survive — `pass nil` — because must-assertions are
+not yet evaluated).
 
-**Lamedh (reference)**: surface through adequacy, with 192 tests across
-7 test files and 10 `.lisp` example specifications, including component
-port declarations for external boundaries (issue #38).
+The Rust implementation provides:
 
-**Rust (`rust/`, at full parity with the pre-port-declaration
-reference, plus deliberate hardening deltas and surface v0.2)**: 714
-tests across 32 binaries, five `.gym` example specifications, eight byte-stable goldens
-(ir/plan/prompts/verify/results/bundle/adequacy + reproducible compile
-trees), all CI-diffed. Verification is tri-state-honest (no vacuous
-passes, no fabricated failures), promotion is fail-closed, the
-adequacy campaign is subject-bound and reports the verifier’s real
-blind spots (todo.gym today: all five standard mutants survive —
-`pass nil` — because must-assertions are not yet evaluated). Lamedh’s
-new port declarations (#38) are not yet ported — they align with the
-interop direction of `docs/shared-domains-design.md` and belong to
-that phase. Surface v0.2 (phase 10) is Rust-only by construction: it
-is a surface-language revision, and the Lamedh surface is the one being
-retired.
-
-The Lamedh reference provides:
-
-- Surface capture and profile resolution
+- A compact `.gym` surface with span-carrying diagnostics from a
+  hand-rolled lexer and recursive-descent parser
+- Versioned semantic profile resolution
 - Closed-world elaboration with semantic IDs and fingerprinting
 - Deterministic 8-node synthesis planning with coverage checks
 - Prompt compilation with structured projections (capabilities, state model,
   type reference, port boundaries, behavioral reference)
-- Component port declarations for external interface boundaries
-  (REST, gRPC, GraphQL, message queues — provides/requires contracts)
 - Candidate validation firewall
 - Executable transition calculus with bounded trace execution
-- Characterized Ruby platform kit with adapters and test doubles
+- Characterized platform kit with adapters per target language
 - Deterministic recipe registry and executor
 - Sandboxed small-model node runner with bounded repair
-- Independent verification obligations (invariant and post-transition checks)
+- Independent verification obligations (invariant and post-transition checks),
+  tri-state (`Holds`/`Fails`/`Unknown`) with an `indeterminate` status
+  rather than vacuous passes
 - Content-addressed caching and incremental regeneration
-- Assembly and promotion evidence bundles
+- Assembly and fail-closed promotion evidence bundles (`hold`/`promote`
+  over six checks)
 - Adequacy campaign framework (mutation, concurrency, fault injection)
 - Canonical serialization with trust-boundary validation
-- Multi-target examples (Ruby, Go, Java, Python, Rust) for both Todo and Twitter specs
-- CI: format check, static check, test suite, Todo elaboration,
-  reproducible compilation
-
-The Rust port additionally provides:
-
-- A compact `.gym` surface with span-carrying diagnostics from a
-  hand-rolled lexer and recursive-descent parser
 - Surface v0.2: named constants and live profile parameters,
   substituted at elaboration so that a const-spelled spec and its
   literal-spelled twin produce identical downstream results;
   coverage-flag enforcement against the declared interface; acceptance
   generators bound to declared actors
-- Tri-state verification (`Holds`/`Fails`/`Unknown`) with an
-  `indeterminate` status rather than vacuous passes
-- Fail-closed promotion (`hold`/`promote`) over six checks
+- Multi-target examples (Ruby, Go, Java, Python, Rust) for both Todo and Twitter specs
 - CI: fmt, warnings-as-errors build, tests, known-bad-spec rejection,
   and byte-diffed goldens for ir/plan/prompts/verify/results/bundle/
   adequacy plus reproducible compile trees
@@ -339,7 +291,8 @@ The Rust port additionally provides:
 - Cache CLI wiring (cache.rs is library-only; any future hit path MUST
   re-run the candidate firewall — the key covers the contract, not the
   candidate’s conformance)
-- Port declarations in the Rust port (Lamedh-only today, issue #38)
+- Component port declarations for external interface boundaries
+  (REST, gRPC, GraphQL, message queues — provides/requires contracts)
 - North star architecture document (issue #12)
 - Open code-health items: promotion policy wiring (#30), dead sentinel
   checks (#31), CLI double-elaboration (#32), dead functions (#33),

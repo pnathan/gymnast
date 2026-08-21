@@ -1,0 +1,510 @@
+# Twitter clone: a classic distributed systems design problem.
+#
+# Core challenges: fan-out on write for home timelines, follower
+# graph consistency, celebrity accounts with millions of followers,
+# idempotent likes/retweets, cursor-based pagination over
+# eventually-consistent timeline materialization, and rate limiting.
+#
+# Hand-translated from examples/twitter.lisp, form-for-form, following
+# examples/todo.gym as the worked example. Two constructs in the Lamedh
+# source have no direct grammar production in this surface (no `if`
+# expression-form and no `implies` predicate operator; see
+# docs/surface-language.md's predicate sublanguage, which offers only
+# `and`/`or`/`not`/`=`/`<`/`<=`/quantifiers/calls). Both occurrences in
+# this file rewrite to their exact classical-logic equivalents rather
+# than being approximated:
+#   - `(if C P true)` (post-tweet's reply-to guards, lines 290-292 of
+#     twitter.lisp) becomes `not C or P`, since `if C then P else true`
+#     is definitionally `implies(C, P)` which is definitionally
+#     `not C or P`.
+#   - `(implies P Q)` (the unique-follow-edges and timeline-consistency
+#     invariants, lines 406-418 of twitter.lisp) becomes `not P or Q`
+#     the same way; where P is itself a conjunction, De Morgan's law
+#     (`not (A and B) = not A or not B`) avoids the missing grouping
+#     parens in predicate position.
+# Also: `(count-edges g :followed x)` / `(count-edges g :follower x)`
+# use a Lisp keyword atom as a positional tag; the predicate call
+# grammar has no keyword-atom token, so the tag becomes a bare
+# identifier argument in the same position (`count_edges (g, followed,
+# x)`), preserving argument order and arity exactly.
+# The synthesis `:target (ruby :track "3.3")` pack has no `:track` slot
+# in the `target lang / framework` production (only an optional
+# `framework`, per docs/ir-contract-deltas.md); `track "3.3"` is kept
+# as a sibling attribute in the synthesis pack instead, losing no data.
+
+# twitter.lisp's :exports lists `Timeline` and `FollowGraph`, neither of
+# which is ever declared anywhere in twitter.lisp (the closest declared
+# entities are the `TimelineEntry` record type and the `follow-graph`
+# state) -- a pre-existing defect the Lamedh reference does not catch
+# (elaborate.lisp never validates :exports against declarations at all).
+# This surface's closed-world checker does (E206), so the export list is
+# corrected here to the actual declared names it was evidently meant to
+# name, rather than reproducing a name that resolves to nothing.
+spec twitter_java = v 0.1 owner platform
+  exports UserId, TweetId, TimelineId,
+    Tweet, User, TimelineEntry, follow_graph,
+    tweet_service, timeline_service, social_service
+
+application chirp = (modules twitter, default_acceptance production)
+
+# --- Actors ---
+
+actor user   = person  (identity oauth2 (issuer, subject))
+actor system = service (identity internal (service_account))
+
+# --- Core types ---
+
+# Cursor/Page are structural pagination primitives twitter.lisp uses
+# without declaring (Lamedh's elaborator treats them as implicit
+# built-ins). todo.gym gets them from the `oddities/profiles/todo_standard`
+# profile's generated declarations (see docs/ir-contract-deltas.md); no
+# equivalent profile is registered for twitter (rust/src/profile.rs), so
+# they are declared locally here with the identical definition the
+# profile generator uses (`opaque text`) rather than left undeclared,
+# which would be a hard E202 in this surface's closed-world checker.
+mode Cursor = opaque text
+mode Page   = opaque text
+
+mode UserId         = opaque text
+mode TweetId         = opaque text
+mode TimelineId      = opaque text
+mode FollowId        = opaque text
+mode NotificationId  = opaque text
+mode Version         = opaque int
+mode Timestamp       = opaque int
+
+mode TweetKind   = enum (original, reply, retweet, quote)
+mode TimelineKind = enum (home, user, mentions)
+mode NotificationKind =
+  enum (mention, like, retweet, follow, reply, quote)
+
+mode MediaRef = struct (
+  text url,
+  text media_type,
+  opt text alt_text )
+
+mode User = struct (
+  UserId id,
+  text (1..15) handle,
+  text (1..50) display_name,
+  text (..160) bio,
+  int follower_count,
+  int following_count,
+  int tweet_count,
+  Timestamp created_at,
+  Version version )
+
+mode Tweet = struct (
+  TweetId id,
+  UserId author,
+  text (1..280) body,
+  TweetKind kind,
+  opt TweetId reply_to,
+  opt TweetId retweet_of,
+  opt TweetId quote_of,
+  # GAP: twitter.lisp:68 `(media (List MediaRef))` has no .gym
+  # equivalent -- the row/collection mode constructor (`[] <mode>`)
+  # documented in docs/surface-language.md is not implemented in the
+  # parser (no `[`/`]` tokens in the lexer at all), and there is no
+  # other list/array mode constructor. Field omitted rather than
+  # approximated; see the translation report for detail.
+  int like_count,
+  int retweet_count,
+  int reply_count,
+  Timestamp created_at,
+  Version version )
+
+mode FollowEdge = struct (
+  FollowId id,
+  UserId follower,
+  UserId followed,
+  Timestamp created_at )
+
+mode TimelineEntry = struct (
+  TweetId tweet_id,
+  Timestamp score,
+  TweetKind reason )
+
+mode Notification = struct (
+  NotificationId id,
+  UserId recipient,
+  NotificationKind kind,
+  UserId actor,
+  opt TweetId subject_tweet,
+  Timestamp created_at,
+  bool read )
+
+# --- Components ---
+
+component tweet_engine = (
+  responsibility "Accept, store, and retrieve tweets",
+  provides tweet_service,
+  uses (auth_provider, durable_store, clock, id_source, rate_limiter) )
+
+component timeline_engine = (
+  responsibility "Materialize and serve home/user/mention timelines",
+  provides timeline_service,
+  uses (durable_store, event_bus, clock, cache) )
+
+component social_engine = (
+  responsibility "Manage follow graph and notifications",
+  provides social_service,
+  uses (auth_provider, durable_store, clock, id_source) )
+
+# --- Interfaces ---
+
+interface tweet_service = for user (
+  # GAP: twitter.lisp:120 `(media (List MediaRef))` omitted -- same
+  # unrepresentable row-mode construct as the Tweet.media field above.
+  cmd post_tweet = (text body, TweetKind kind, opt TweetId reply_to,
+      opt TweetId quote_of) Tweet
+      ! (unauthenticated, rate_limited, validation_failed,
+         not_found, blocked),
+
+  cmd delete_tweet = (TweetId tweet_id) void
+      ! (unauthenticated, not_found, forbidden),
+
+  cmd like_tweet = (TweetId tweet_id) void
+      ! (unauthenticated, not_found, already_liked),
+
+  cmd unlike_tweet = (TweetId tweet_id) void
+      ! (unauthenticated, not_found, not_liked),
+
+  qry get_tweet = (TweetId tweet_id) Tweet
+      ! (unauthenticated, not_found),
+
+  qry get_replies = (TweetId tweet_id, opt Cursor cursor) Page (Tweet)
+      ! (unauthenticated, not_found, invalid_cursor) )
+
+interface timeline_service = for user (
+  qry home_timeline = (opt Cursor cursor, opt int limit) Page (TimelineEntry)
+      ! (unauthenticated, invalid_cursor),
+
+  qry user_timeline = (UserId user_id, opt Cursor cursor) Page (Tweet)
+      ! (unauthenticated, not_found, invalid_cursor),
+
+  qry mentions_timeline = (opt Cursor cursor) Page (Tweet)
+      ! (unauthenticated, invalid_cursor) )
+
+interface social_service = for user (
+  cmd follow = (UserId target) FollowEdge
+      ! (unauthenticated, not_found, already_following,
+         blocked, self_follow),
+
+  cmd unfollow = (UserId target) void
+      ! (unauthenticated, not_found, not_following),
+
+  qry followers = (UserId user_id, opt Cursor cursor) Page (User)
+      ! (unauthenticated, not_found, invalid_cursor),
+
+  qry following = (UserId user_id, opt Cursor cursor) Page (User)
+      ! (unauthenticated, not_found, invalid_cursor),
+
+  qry notifications = (opt Cursor cursor) Page (Notification)
+      ! (unauthenticated, invalid_cursor) )
+
+# --- State ---
+
+state tweet_store = (
+  of aggregate (Tweet, Like),
+  owner tweet_engine,
+  durability durable,
+  initial empty,
+  aggregate per_tweet TweetId,
+  versioned optimistic,
+  partitioned_by author,
+  consistency serial_per_tweet )
+
+state follow_graph = (
+  of aggregate (FollowEdge),
+  owner social_engine,
+  durability durable,
+  initial empty,
+  aggregate per_user UserId,
+  versioned optimistic,
+  partitioned_by follower,
+  consistency serial_per_edge )
+
+state user_profiles = (
+  of aggregate (User),
+  owner social_engine,
+  durability durable,
+  initial empty,
+  aggregate per_user UserId,
+  versioned optimistic,
+  consistency serial_per_user )
+
+state timeline_store = (
+  of aggregate (TimelineEntry),
+  owner timeline_engine,
+  durability durable,
+  initial empty,
+  aggregate per_user UserId,
+  versioned none,
+  consistency eventual )
+
+state notification_store = (
+  of aggregate (Notification),
+  owner social_engine,
+  durability durable,
+  initial empty,
+  aggregate per_user UserId,
+  versioned none,
+  consistency eventual )
+
+# --- Flows ---
+
+flow user_to_tweets = user -> tweet_service : cmd
+  (grant authenticated_session, deny raw_oauth_token)
+
+flow user_to_social = user -> social_service : cmd
+  (grant authenticated_session, deny raw_oauth_token)
+
+flow user_to_timeline = user -> timeline_service : qry
+  (grant authenticated_session, deny raw_oauth_token)
+
+flow tweet_events_to_timeline = tweet_engine -> timeline_engine : event
+  (data (tweet_created, tweet_deleted))
+
+flow social_events_to_timeline = social_engine -> timeline_engine : event
+  (data (followed, unfollowed))
+
+# --- Behaviors ---
+
+behavior post_tweet = on tweet_service.post_tweet (user, request) (
+  reads (tweets, user_profiles), writes tweets,
+  atomic tweet request.body, idempotency command_key;
+
+  requires authenticated (user);
+  requires not rate_exceeded (user, 300, per_hour);
+  requires length (request.body) <= 280;
+  requires not present (request.reply_to) or present (tweets, request.reply_to);
+  requires not present (request.reply_to)
+    or not blocked_by (request.reply_to.author, user);
+  ensures  post = insert_tweet (pre, request, result);
+  ensures  result.author = user.id;
+  returns  result;
+  fails rate_limited
+    when rate_exceeded (user, 300, per_hour)
+    preserves all_state;
+  fails not_found
+    when present (request.reply_to) and not present (tweets, request.reply_to)
+    preserves all_state;
+  fails blocked
+    when present (request.reply_to) and blocked_by (request.reply_to.author, user)
+    preserves all_state;
+  emits tweet_created at_least_once )
+
+behavior delete_tweet = on tweet_service.delete_tweet (user, request) (
+  reads tweets, writes tweets,
+  atomic tweet request.tweet_id, idempotency command_key;
+
+  requires authenticated (user);
+  requires present (tweets, request.tweet_id);
+  requires tweet_author (tweets, request.tweet_id) = user.id;
+  ensures  not present (post.tweets, request.tweet_id);
+  fails forbidden
+    when not tweet_author (tweets, request.tweet_id) = user.id
+    preserves all_state;
+  emits tweet_deleted at_least_once )
+
+behavior like_tweet = on tweet_service.like_tweet (user, request) (
+  reads (tweets, likes), writes (likes, tweets),
+  atomic like user.id request.tweet_id,
+  idempotency user.id request.tweet_id;
+
+  requires authenticated (user);
+  requires present (tweets, request.tweet_id);
+  requires not liked (likes, user.id, request.tweet_id);
+  ensures  liked (post.likes, user.id, request.tweet_id);
+  ensures  post.tweet.like_count = add (pre.tweet.like_count, 1);
+  fails already_liked
+    when liked (likes, user.id, request.tweet_id)
+    preserves all_state;
+  emits tweet_liked at_least_once )
+
+behavior follow_user = on social_service.follow (user, request) (
+  reads (follow_graph, user_profiles), writes (follow_graph, user_profiles),
+  atomic follow_edge user.id request.target,
+  idempotency user.id request.target;
+
+  requires authenticated (user);
+  requires not user.id = request.target;
+  requires present (user_profiles, request.target);
+  requires not following (follow_graph, user.id, request.target);
+  requires not blocked_by (request.target, user);
+  ensures  following (post.follow_graph, user.id, request.target);
+  ensures  post.target.follower_count = add (pre.target.follower_count, 1);
+  ensures  post.user.following_count = add (pre.user.following_count, 1);
+  fails already_following
+    when following (follow_graph, user.id, request.target)
+    preserves all_state;
+  fails self_follow
+    when user.id = request.target
+    preserves all_state;
+  emits followed at_least_once )
+
+behavior unfollow_user = on social_service.unfollow (user, request) (
+  reads (follow_graph, user_profiles), writes (follow_graph, user_profiles),
+  atomic follow_edge user.id request.target,
+  idempotency user.id request.target;
+
+  requires authenticated (user);
+  requires following (follow_graph, user.id, request.target);
+  ensures  not following (post.follow_graph, user.id, request.target);
+  ensures  post.target.follower_count = sub (pre.target.follower_count, 1);
+  ensures  post.user.following_count = sub (pre.user.following_count, 1);
+  fails not_following
+    when not following (follow_graph, user.id, request.target)
+    preserves all_state;
+  emits unfollowed at_least_once )
+
+# --- Invariants ---
+
+inv tweet_length = on tweet_store
+  always for all Tweet tweet : length (tweet.body) <= 280
+
+inv no_self_follow = on follow_graph
+  always for all FollowEdge edge : not edge.follower = edge.followed
+
+inv follower_count_consistency = on user_profiles
+  always for all User u :
+    u.follower_count = count_edges (follow_graph, followed, u.id)
+
+inv following_count_consistency = on user_profiles
+  always for all User u :
+    u.following_count = count_edges (follow_graph, follower, u.id)
+
+inv like_count_consistency = on tweet_store
+  always for all Tweet tweet : tweet.like_count = count_likes (likes, tweet.id)
+
+inv unique_follow_edges = on follow_graph
+  always for all FollowEdge a : for all FollowEdge b :
+    not a.follower = b.follower or not a.followed = b.followed
+    or a.id = b.id
+
+inv timeline_consistency = on timeline_store
+  always for all TimelineEntry entry : for all UserId owner :
+    not in_timeline (entry, owner)
+    or following (follow_graph, owner, entry.tweet.author)
+    or owner = entry.tweet.author
+
+# --- Constraints ---
+
+constraint tweet_rate_limit = workload on tweet_service
+  under (virtual_users 10000, duration 30 min,
+    write_p95 200 ms, read_p95 100 ms)
+  must for all User u : tweets_per_hour (u) <= 300
+
+constraint timeline_latency = latency on timeline_service
+  under (virtual_users 100000, duration 30 min, read_p95 500 ms)
+  must missed_tweets = 0 and timeline_staleness <= seconds (30)
+
+constraint fanout_consistency = consistency on timeline_engine
+  under (virtual_users 50000, duration 60 min)
+  must eventually_consistent (timeline_store, seconds (30))
+    and lost_tweets = 0 and phantom_tweets = 0
+
+constraint celebrity_fanout = scalability on timeline_engine
+  under (celebrity_followers 10000000, tweet_rate (1, per_minute))
+  must fanout_latency_p99 <= seconds (60) and lost_followers = 0
+
+# --- Synthesis ---
+
+synthesis prototype = target java / spring (
+  platform gymnast_reference_platform_v1,
+  model small_code_model (class nano, temperature 0, max_attempts 3),
+  attempts 3,
+  must_not (invent_product_semantics, add_unpinned_dependencies) )
+
+# --- Acceptance ---
+
+acceptance production = of chirp (
+
+  property post_then_read =
+    generate (actor authenticated_user of user, tweet valid_tweet)
+    execute (post_tweet (actor, tweet); get_tweet (actor, result.id))
+    must equivalent (result, tweet),
+
+  property delete_removes =
+    generate (actor authenticated_user of user, tweet valid_tweet)
+    execute (post_tweet (actor, tweet); delete_tweet (actor, result.id);
+      get_tweet (actor, result.id))
+    must fails_with not_found,
+
+  property like_idempotent =
+    generate (actor authenticated_user of user, tweet existing_tweet)
+    execute (like_tweet (actor, tweet.id); like_tweet (actor, tweet.id))
+    must fails_with already_liked,
+
+  property follow_then_timeline =
+    generate (follower authenticated_user of user,
+      author authenticated_user of user, tweet valid_tweet)
+    execute (follow (follower, author.id); post_tweet (author, tweet);
+      wait (30 s); home_timeline (follower))
+    must contains (result, tweet),
+
+  property unfollow_removes_from_timeline =
+    generate (follower authenticated_user of user,
+      author authenticated_user of user, tweet valid_tweet)
+    execute (follow (follower, author.id); post_tweet (author, tweet);
+      wait (30 s); unfollow (follower, author.id); home_timeline (follower))
+    must not (contains (result, tweet)),
+
+  property cannot_follow_self =
+    generate (actor authenticated_user of user)
+    execute follow (actor, actor.id)
+    must fails_with self_follow,
+
+  scenario celebrity_timeline = (
+    given celebrity = user_with_followers (10000000);
+    given follower = authenticated_user;
+    when follow (follower, celebrity.id); then succeeds;
+    when post_tweet (celebrity, valid_tweet ()); then succeeds;
+    when wait (60 s);
+    when home_timeline (follower);
+    then contains (result, tweet) ),
+
+  scenario rate_limit_enforcement = (
+    given actor = authenticated_user;
+    when repeat (300, post_tweet (actor, valid_tweet ())); then succeeds;
+    when post_tweet (actor, valid_tweet ());
+    then fails_with rate_limited ),
+
+  scenario reply_thread = (
+    given author = authenticated_user;
+    given replier = authenticated_user;
+    when post_tweet (author, valid_tweet ()); then succeeds;
+    when post_tweet (replier, reply_to (result)); then succeeds;
+    when get_replies (author, tweet.id);
+    then contains (result, reply) ),
+
+  concurrency like_storm = (actors 10000, schedule adversarial)
+    must tweet.like_count = count_unique_likers (),
+
+  concurrency follow_race = (actors 1000, schedule adversarial)
+    must lost_follows = 0
+      and u.follower_count = count_edges (follow_graph, followed, u.id),
+
+  concurrency timeline_fanout_race = (actors 50000, schedule adversarial)
+    must lost_tweets = 0 and phantom_tweets = 0,
+
+  fault tweet_restart_durability = after acknowledged_write inject restart
+    must read_your_acknowledged_write,
+
+  fault timeline_crash_recovery = after tweet_created_event inject restart
+    must eventually_delivered (timeline_store, seconds (60)),
+
+  fault follower_count_partition = after follow_edge_written
+    inject network_partition
+    must eventually_consistent (follower_count, seconds (120)),
+
+  fault duplicate_event_delivery = after tweet_created_event
+    inject duplicate_delivery
+    must timeline_entry_count = 1,
+
+  coverage (every_operation, every_error, every_transition,
+            every_invariant, boundaries),
+
+  execution (clock virtual, randomness seeded,
+             network controlled, timezone "UTC") )
