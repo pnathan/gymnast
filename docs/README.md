@@ -14,41 +14,20 @@ documents report measurements already taken.
 | [`surface-v0.2-design.md`](surface-v0.2-design.md) | Design → implemented | Derivation of the three v0.2 surface features from the maintenance probes, and their substitution semantics. Implemented by phase 10. |
 | [`shared-domains-design.md`](shared-domains-design.md) | Design | Shared domain compilation units and gRPC/OpenAPI interop projections for cross-application communication. Not implemented; the eventual execution plan derives from it. |
 
-## Measurements
+## Records
 
 | Document | Kind | Subject |
 |---|---|---|
 | [`change-study.md`](change-study.md) | Record | Five maintenance changes applied across the example corpus, with the pipeline's response measured at every stage. Source of the v0.2 flexibility requirements. |
-
-## Rust port execution plans
-
-Each phase ran plan → committed-oracle crew (oracle tests committed red
-before implementation; implementers may not touch them; integrator-only
-arbitration with in-file notes) → adversarial phase gate that
-mutation-tests the oracles. Gate regression tests live in
-`rust/tests/gate*_regression_test.rs`.
-
-| Plan | Phase | Delivers |
-|---|---|---|
-| [`rust-port-plan.md`](rust-port-plan.md) | 1 | Lexer, parser, typed AST, v0 checker |
-| [`rust-port-plan-phase2.md`](rust-port-plan-phase2.md) | 2 | Profile resolution, elaboration, canonical IR |
-| [`rust-port-plan-phase3.md`](rust-port-plan-phase3.md) | 3 | Accessors, deterministic planner, prompt compiler |
-| [`rust-port-plan-phase4.md`](rust-port-plan-phase4.md) | 4 | Sexpr reader, candidate firewall, recipes, `compile` |
-| [`rust-port-plan-phase5.md`](rust-port-plan-phase5.md) | 5 | Sandboxed model runner with bounded repair |
-| [`rust-port-plan-phase6.md`](rust-port-plan-phase6.md) | 6 | Executable transition calculus and verification |
-| [`rust-port-plan-phase7.md`](rust-port-plan-phase7.md) | 7 | Tri-state verification, live traces, caching |
-| [`rust-port-plan-phase8.md`](rust-port-plan-phase8.md) | 8 | Assembly and promotion evidence bundles |
-| [`rust-port-plan-phase9.md`](rust-port-plan-phase9.md) | 9 | Adequacy campaign with baseline-aware detection |
-| [`rust-port-plan-phase10.md`](rust-port-plan-phase10.md) | 10 | Surface v0.2: constants, coverage teeth, actor binding |
-
-All ten phases are complete and gate-accepted.
+| `rust-port-plan*.md` (ten files) | Record | The execution plans for Rust port phases 1–10, all complete and gate-accepted. Kept as history; read one only when you need to know why a phase was built the way it was. Gate regression tests live in `rust/tests/gate*_regression_test.rs`. |
 
 ## Reading order
 
 - **New to the project** — repository [`README.md`](../README.md), then
   `surface-language.md`, then `examples/todo.gym`.
-- **Porting a Lamedh consumer to Rust** — `ir-contract-deltas.md`
-  first, then the relevant phase plan.
+- **Changing the Rust IR or anything downstream of it** —
+  `ir-contract-deltas.md`, which is where every deliberate deviation
+  from the Lamedh reference and every known limitation is recorded.
 - **Proposing a surface-language change** — `change-study.md` for how
   the language behaves under maintenance, then `surface-v0.2-design.md`
   for the shape a derivation is expected to take.
