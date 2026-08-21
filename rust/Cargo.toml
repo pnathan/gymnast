@@ -1,0 +1,14 @@
+[package]
+name = "gymnast-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[[bin]]
+name = "gymnast-rs"
+path = "src/main.rs"
+
+[lib]
+name = "gymnast_rs"
+path = "src/lib.rs"

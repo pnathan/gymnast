@@ -24,3 +24,82 @@ jobs:
           bin/gymnast compile examples/todo.lisp todo-spec build/one
           bin/gymnast compile examples/todo.lisp todo-spec build/two
           diff -ru build/one build/two
+
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Build (warnings are errors)
+        run: cargo build --all-targets
+        env:
+          RUSTFLAGS: -D warnings
+      - name: Tests
+        run: cargo test
+      - name: Check todo.gym fixture
+        run: cargo run -- check ../examples/todo.gym
+      - name: Reject a known-bad spec
+        run: |
+          printf 'spec t = v 0.1 owner o exports A\n\nmode A = struct (Missing x)\n' > /tmp/bad.gym
+          if cargo run -- check /tmp/bad.gym; then
+            echo "check accepted a spec with an unknown mode" >&2; exit 1
+          fi
+      - name: Reproducible IR
+        run: |
+          cargo run -- ir ../examples/todo.gym > /tmp/ir-one.sexpr
+          cargo run -- ir ../examples/todo.gym > /tmp/ir-two.sexpr
+          diff /tmp/ir-one.sexpr /tmp/ir-two.sexpr
+          diff /tmp/ir-one.sexpr tests/fixtures/todo-ir.sexpr
+      - name: Reproducible plan
+        run: |
+          cargo run -- plan ../examples/todo.gym > /tmp/plan-one.sexpr
+          cargo run -- plan ../examples/todo.gym > /tmp/plan-two.sexpr
+          diff /tmp/plan-one.sexpr /tmp/plan-two.sexpr
+          diff /tmp/plan-one.sexpr tests/fixtures/todo-plan.sexpr
+      - name: Reproducible prompts
+        run: |
+          cargo run -- prompts ../examples/todo.gym > /tmp/prompts-one.sexpr
+          cargo run -- prompts ../examples/todo.gym > /tmp/prompts-two.sexpr
+          diff /tmp/prompts-one.sexpr /tmp/prompts-two.sexpr
+          diff /tmp/prompts-one.sexpr tests/fixtures/todo-prompts.sexpr
+      - name: Reject a known-bad spec (plan)
+        run: |
+          printf 'spec t = v 0.1 owner o exports A\n\nmode A = opaque text\ninv a = on s always p\ninv a = on s always q\n' > /tmp/bad-plan.gym
+          if cargo run -- plan /tmp/bad-plan.gym; then
+            echo "plan accepted a spec with a duplicate semantic id" >&2; exit 1
+          fi
+      - name: Reproducible verify
+        run: |
+          cargo run -- verify ../examples/todo.gym > /tmp/verify-one.sexpr
+          cargo run -- verify ../examples/todo.gym > /tmp/verify-two.sexpr
+          diff /tmp/verify-one.sexpr /tmp/verify-two.sexpr
+          diff /tmp/verify-one.sexpr tests/fixtures/todo-verify.sexpr
+      - name: Reproducible adequacy
+        run: |
+          cargo run -- adequacy ../examples/todo.gym > /tmp/adequacy-one.sexpr
+          cargo run -- adequacy ../examples/todo.gym > /tmp/adequacy-two.sexpr
+          diff /tmp/adequacy-one.sexpr /tmp/adequacy-two.sexpr
+          diff /tmp/adequacy-one.sexpr tests/fixtures/todo-adequacy.sexpr
+      - name: Adequacy exits 1 on a known-bad spec
+        run: |
+          printf 'spec t = v 0.1 owner o exports A\n\nmode A = opaque text\ninv a = on s always p\ninv a = on s always q\n' > /tmp/bad-adequacy.gym
+          if cargo run -- adequacy /tmp/bad-adequacy.gym; then
+            echo "adequacy must exit nonzero on a broken spec" && exit 1
+          fi
+      - name: Verify exits 1 on a known-bad spec
+        run: |
+          printf 'spec t = v 0.1 owner o exports A\n\nmode A = opaque text\ninv a = on s always p\ninv a = on s always q\n' > /tmp/bad-verify.gym
+          if cargo run -- verify /tmp/bad-verify.gym; then
+            echo "verify accepted a spec with a duplicate semantic id" >&2; exit 1
+          fi
+      - name: Reproducible compilation
+        run: |
+          cargo run -- compile ../examples/todo.gym /tmp/rust-build-one
+          cargo run -- compile ../examples/todo.gym /tmp/rust-build-two
+          diff -ru /tmp/rust-build-one /tmp/rust-build-two
+          diff /tmp/rust-build-one/results.sexpr tests/fixtures/todo-results.sexpr
+          diff /tmp/rust-build-one/evidence-bundle.sexpr tests/fixtures/todo-bundle.sexpr
