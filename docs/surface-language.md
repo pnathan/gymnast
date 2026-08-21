@@ -1,9 +1,12 @@
 # Gymnast surface language — design proposal (draft)
 
-Status: proposal for review. Companion artifact: `examples/todo.gym`, a
-form-for-form translation of `examples/todo.lisp` into this surface.
+Status: IMPLEMENTED through v0.2 (Rust port phases 1–10); the open
+questions near the end of this document remain open. Companion
+artifact: `examples/todo.gym`, a form-for-form translation of
+`examples/todo.lisp` into this surface; four further specifications
+(`bug-tracker`, `gantt`, `chatbot`, `bi-ingest`) exercise it.
 
-This document proposes the human-facing specification language for the Rust
+This document defines the human-facing specification language for the Rust
 port of Gymnast. It replaces the S-expression/fexpr surface with a closed,
 statically checked, Algol-family grammar. Everything downstream of
 elaboration (IR, plan, prompts, calculus, verification) is unaffected: the
