@@ -1,16 +1,23 @@
-# IR contract: deltas from the Lamedh reference
+# IR contract
 
-The Rust IR mirrors the Lamedh IR's structure (partitions, semantic IDs,
-canonical field ordering, clause-order preservation, fingerprint over the
-fingerprint-free form) but is **not** byte-compatible with it, and a few
-shapes differ deliberately. This file is the authoritative enumeration.
-Phase-3+ plans must instruct agents to port Lamedh consumers
-(`src/plan.lisp`, `src/verify.lisp`, `src/prompt.lisp`, …) against **this
-contract**, not against the Lamedh golden files.
+The Gymnast IR has a structure — partitions, semantic IDs, canonical
+field ordering, clause-order preservation, a fingerprint over the
+fingerprint-free form — and a number of shapes that were deliberate
+design choices rather than obvious defaults. This file is the
+authoritative record of that shape, of the choices behind the
+non-obvious parts, and of the known limitations that remain. Consumers
+downstream of the IR (`plan.rs`, `verify.rs`, `prompt.rs`, …) must be
+ported against **this contract**, not against golden files, which are
+pinned fixtures and not a substitute for the contract itself.
 
-Reference points: Lamedh golden `tests/fixtures/golden/ir.sexpr`
-(from `examples/todo.lisp`), Rust golden `rust/tests/fixtures/todo-ir.sexpr`
-(from `examples/todo.gym`).
+Reference point: golden `rust/tests/fixtures/todo-ir.sexpr` (from
+`examples/todo.gym`).
+
+This document originated as an enumeration of deltas against Lamedh, a
+prior reference implementation that has since been retired; the
+comparisons below are kept where they explain why a shape was chosen,
+but the document's authority now stands on its own, not as a diff
+against a departed implementation.
 
 ## Shapes that intentionally differ
 

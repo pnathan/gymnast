@@ -13,6 +13,7 @@ pub mod ir;
 pub mod lexer;
 pub mod parser;
 pub mod plan;
+pub mod platform;
 pub mod profile;
 pub mod prompt;
 pub mod recipe;

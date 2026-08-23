@@ -225,24 +225,44 @@ fn target_section(node: &PlanNode) -> String {
     )
 }
 
-/// CAPABILITY CONTRACTS section: phase 3 has no platform kit, so every
-/// capability projects as its bare name on an indented line (the Lamedh
-/// fallback path in `gymnast-format-capability` for a missing capability
-/// definition). Omitted entirely when the node carries no capabilities.
-///
-/// PHASE 4 TODO: once a Rust platform-kit registry exists, look each
-/// capability up and project its version/guarantees/failure-modes the
-/// way `gymnast-format-capability` does when a definition IS found.
+/// CAPABILITY CONTRACTS section: each capability is looked up in the
+/// platform kit registered for the plan node's target language. When a
+/// definition is found it projects version/guarantees/failure-modes,
+/// mirroring `gymnast-format-capability`'s found path in
+/// `src/prompt.lisp`. When no kit is registered for the target, or the
+/// kit does not define the capability, it falls back to the bare name
+/// on an indented line (`gymnast-format-capability`'s missing-definition
+/// path). Omitted entirely when the node carries no capabilities.
 fn capability_section(node: &PlanNode) -> String {
     if node.capabilities.is_empty() {
         return String::new();
     }
+    let lang = target_language(&node.target);
+    let kit_caps = lang
+        .as_deref()
+        .and_then(crate::platform::capabilities_for_target);
     let lines: Vec<String> = node
         .capabilities
         .iter()
-        .map(|c| format!("  {}", c))
+        .map(|c| format_capability(c, kit_caps))
         .collect();
     format!("CAPABILITY CONTRACTS\n{}", lines.join("\n"))
+}
+
+/// Formats a single capability line, looking it up by name in the given
+/// platform kit's capabilities (if any). Mirrors `gymnast-format-capability`.
+fn format_capability(name: &str, kit_caps: Option<&[crate::platform::Capability]>) -> String {
+    let found = kit_caps.and_then(|caps| caps.iter().find(|c| c.name == name));
+    match found {
+        Some(cap) => format!(
+            "  {} (v{}):\n    Guarantees: {}\n    Failure modes: {}",
+            name,
+            cap.version,
+            cap.guarantees.join(", "),
+            cap.failure_modes.join(", "),
+        ),
+        None => format!("  {}", name),
+    }
 }
 
 /// Strips an `(aggregate A B C)` head, printing the plain list otherwise
@@ -843,5 +863,45 @@ mod tests {
             };
             assert_eq!(pkg.fingerprint, fingerprint::fingerprint(&stripped));
         }
+    }
+
+    fn ruby_node(id: &str, capabilities: Vec<String>) -> PlanNode {
+        PlanNode::new(
+            id.to_string(),
+            "structural",
+            "design-contracts-v1",
+            vec![],
+            vec![],
+            Sexpr::List(vec![Sexpr::sym("ruby"), Sexpr::sym("rails")]),
+            Sexpr::sym("none"),
+            vec![],
+            capabilities,
+            vec![],
+            vec![],
+        )
+    }
+
+    #[test]
+    fn test_capability_section_found_projects_version_guarantees_failure_modes() {
+        let node = ruby_node("m/plan/x", vec!["identity".to_string()]);
+        let section = capability_section(&node);
+        assert!(section.contains("  identity (v1.0):"));
+        assert!(section.contains("    Guarantees: "));
+        assert!(section.contains("token_validation"));
+        assert!(section.contains("    Failure modes: "));
+        assert!(section.contains("unauthenticated"));
+    }
+
+    #[test]
+    fn test_capability_section_unknown_capability_falls_back_to_bare_name() {
+        let node = ruby_node("m/plan/x", vec!["does_not_exist".to_string()]);
+        let section = capability_section(&node);
+        assert_eq!(section, "CAPABILITY CONTRACTS\n  does_not_exist");
+    }
+
+    #[test]
+    fn test_capability_section_omitted_when_no_capabilities() {
+        let node = ruby_node("m/plan/x", vec![]);
+        assert_eq!(capability_section(&node), "");
     }
 }

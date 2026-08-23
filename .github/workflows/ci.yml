@@ -5,26 +5,6 @@ on:
   pull_request:
 
 jobs:
-  lamedh:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install pinned Lamedh release
-        run: scripts/bootstrap-lamedh.sh
-      - name: Format check
-        run: find src tests examples -type f -name '*.lisp' -print0 | sort -z | xargs -0 .tools/bin/lamedh --fmt-check
-      - name: Static check
-        run: .tools/bin/lamedh --check src/core.lisp src/surface.lisp src/profile.lisp src/elaborate.lisp src/plan.lisp src/prompt.lisp src/candidate.lisp src/transition.lisp src/platform.lisp src/recipe.lisp src/runner.lisp src/verify.lisp src/cache.lisp src/assembly.lisp src/adequacy.lisp src/serialize.lisp
-      - name: Lisp tests
-        run: .tools/bin/lamedh --test tests
-      - name: Elaborate Todo
-        run: bin/gymnast check examples/todo.lisp todo-spec
-      - name: Reproducible compilation
-        run: |
-          bin/gymnast compile examples/todo.lisp todo-spec build/one
-          bin/gymnast compile examples/todo.lisp todo-spec build/two
-          diff -ru build/one build/two
-
   rust:
     runs-on: ubuntu-latest
     defaults:
